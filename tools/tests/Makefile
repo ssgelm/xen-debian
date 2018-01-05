@@ -12,8 +12,11 @@ SUBDIRS-y += regression
 endif
 SUBDIRS-$(CONFIG_X86) += x86_emulator
 SUBDIRS-y += xen-access
+SUBDIRS-y += xenstore
 
-.PHONY: all clean install distclean
+.PHONY: all clean install distclean uninstall
 all clean distclean: %: subdirs-%
 
 install:
+
+uninstall:

@@ -7,9 +7,9 @@ Patch-Name: tools-console-prefix.diff
 
 ---
 
---- xen-4.8.2+xsa243.orig/tools/console/Makefile
-+++ xen-4.8.2+xsa243/tools/console/Makefile
-@@ -8,6 +8,7 @@ CFLAGS  += $(CFLAGS_libxenstore)
+--- a/tools/console/Makefile
++++ b/tools/console/Makefile
+@@ -8,6 +8,7 @@
  LDLIBS += $(LDLIBS_libxenctrl)
  LDLIBS += $(LDLIBS_libxenstore)
  LDLIBS += $(SOCKET_LIBS)
@@ -17,7 +17,7 @@ Patch-Name: tools-console-prefix.diff
  
  LDLIBS_xenconsoled += $(UTIL_LIBS)
  LDLIBS_xenconsoled += -lrt
-@@ -44,9 +45,7 @@ $(eval $(genpath-target))
+@@ -45,10 +46,8 @@
  
  .PHONY: install
  install: $(BIN)
@@ -27,4 +27,5 @@ Patch-Name: tools-console-prefix.diff
 -	$(INSTALL_PROG) xenconsole $(DESTDIR)$(LIBEXEC_BIN)
 +	$(INSTALL_PROG) xenconsole xenconsoled $(DESTDIR)$(LIBEXEC_BIN)
  
- -include $(DEPS)
+ .PHONY: uninstall
+ uninstall:

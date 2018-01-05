@@ -15,6 +15,8 @@
 #define FCW_RESET                 0x0040
 #define MXCSR_DEFAULT             0x1f80
 
+extern uint32_t mxcsr_mask;
+
 #define XSTATE_CPUID              0x0000000d
 
 #define XCR_XFEATURE_ENABLED_MASK 0x00000000  /* index of XCR0 */
@@ -99,14 +101,21 @@ struct __attribute__((aligned (64))) xsave_struct
     char data[];                             /* Variable layout states */
 };
 
+struct xstate_bndcsr {
+    uint64_t bndcfgu;
+    uint64_t bndstatus;
+};
+
 /* extended state operations */
-bool_t __must_check set_xcr0(u64 xfeatures);
+bool __must_check set_xcr0(u64 xfeatures);
 uint64_t get_xcr0(void);
 void set_msr_xss(u64 xss);
 uint64_t get_msr_xss(void);
+uint64_t read_bndcfgu(void);
 void xsave(struct vcpu *v, uint64_t mask);
 void xrstor(struct vcpu *v, uint64_t mask);
-bool_t xsave_enabled(const struct vcpu *v);
+void xstate_set_init(uint64_t mask);
+bool xsave_enabled(const struct vcpu *v);
 int __must_check validate_xstate(u64 xcr0, u64 xcr0_accum,
                                  const struct xsave_hdr *);
 int __must_check handle_xsetbv(u32 index, u64 new_bv);
@@ -119,7 +128,7 @@ int xstate_alloc_save_area(struct vcpu *v);
 void xstate_init(struct cpuinfo_x86 *c);
 unsigned int xstate_ctxt_size(u64 xcr0);
 
-static inline bool_t xstate_all(const struct vcpu *v)
+static inline bool xstate_all(const struct vcpu *v)
 {
     /*
      * XSTATE_FP_SSE may be excluded, because the offsets of XSTATE_FP_SSE

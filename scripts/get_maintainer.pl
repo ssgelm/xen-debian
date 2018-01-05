@@ -283,6 +283,13 @@ while (<$maint>) {
 
 	##Filename pattern matching
 	if ($type eq "F" || $type eq "X") {
+	    # Bash brace expansion, not nested
+	    # match {,*,*} and transform ',' to '|' one by one.
+	    # While there is more than one ',', convert one to '|'.
+	    while ($value =~ s/([^\\])\{(|[^},]*[^,\\]),((|[^},]*[^,\\]),(|[^}]*[^\\]))\}/$1\{$2|$3\}/g) {
+	    }
+	    $value =~ s/([^\\])\{(|[^},]*[^,\\]),(|[^}]*[^\\])\}/$1($2|$3)/g;
+
 	    $value =~ s@\.@\\\.@g;       ##Convert . to \.
 	    $value =~ s/\*/\.\*/g;       ##Convert * to .*
 	    $value =~ s/\?/\./g;         ##Convert ? to .
@@ -564,11 +571,15 @@ sub get_maintainers {
     # Find responsible parties
 
     my %exact_pattern_match_hash = ();
+    # By default "THE REST" will be suppressed.
+    my $suppress_the_rest = 1;
 
     foreach my $file (@files) {
 
 	my %hash;
 	my $tvi = find_first_section();
+	# Unless stated otherwise, a file is maintained by "THE REST"
+	my $file_maintained_by_the_rest = 1;
 	while ($tvi < @typevalue) {
 	    my $start = find_starting_index($tvi);
 	    my $end = find_ending_index($tvi);
@@ -626,6 +637,14 @@ sub get_maintainers {
 
 	foreach my $line (sort {$hash{$b} <=> $hash{$a}} keys %hash) {
 	    add_categories($line);
+	    my $role = get_maintainer_role($line);
+
+	    # Check the role, if it is not "THE REST" then the file is not
+	    # only maintained by "THE REST".
+	    if ( get_maintainer_role($line) ne "supporter:THE REST" ) {
+		    $file_maintained_by_the_rest = 0;
+	    }
+
 	    if ($sections) {
 		my $i;
 		my $start = find_starting_index($line);
@@ -637,6 +656,12 @@ sub get_maintainers {
 			$line =~ s/([^\\])\.$/$1\?/g;	##Convert . back to ?
 			$line =~ s/\\\./\./g;       	##Convert \. to .
 			$line =~ s/\.\*/\*/g;       	##Convert .* to *
+			## Convert (|) back to {,}
+			# match (|*|*) and transform '|' to ',' one by one
+			# While there is more than one '|', convert one to ','.
+			while ($line =~ s/([^\\])\((|[^)|]*[^|\\])\|((|[^)|]*[^|\\])\|(|[^)]*[^\\]))\)/$1($2,$3)/g) {
+			}
+			$line =~ s/([^\\])\((|[^)|]*[^|\\])\|(|[^)]*[^\\])\)/$1\{$2,$3\}/g;
 		    }
 		    $line =~ s/^([A-Z]):/$1:\t/g;
 		    print("$line\n");
@@ -644,6 +669,9 @@ sub get_maintainers {
 		print("\n");
 	    }
 	}
+	# If the file is only maintained by "THE REST", then CC all of them on
+	# the patch.
+	$suppress_the_rest = 0 if $file_maintained_by_the_rest;
     }
 
     if ($keywords) {
@@ -653,7 +681,8 @@ sub get_maintainers {
 	}
     }
 
-    if ($email_drop_the_rest_supporter_if_supporter_found && $#email_to > 0) {
+    if ($email_drop_the_rest_supporter_if_supporter_found &&
+	$suppress_the_rest && $#email_to > 0) {
         my @email_new;
         my $do_replace = 0;
         foreach my $email (@email_to) {

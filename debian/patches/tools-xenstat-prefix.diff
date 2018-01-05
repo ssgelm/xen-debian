@@ -7,9 +7,9 @@ Patch-Name: tools-xenstat-prefix.diff
 
 ---
 
---- xen-4.8.2+xsa243.orig/tools/xenstat/libxenstat/Makefile
-+++ xen-4.8.2+xsa243/tools/xenstat/libxenstat/Makefile
-@@ -20,7 +20,7 @@ MAKE_LINK=ln -sf
+--- a/tools/xenstat/libxenstat/Makefile
++++ b/tools/xenstat/libxenstat/Makefile
+@@ -20,7 +20,7 @@
  
  LIB=src/libxenstat.a
  SHLIB=src/libxenstat.so
@@ -18,7 +18,7 @@ Patch-Name: tools-xenstat-prefix.diff
  OBJECTS-$(CONFIG_Linux) += src/xenstat_linux.o
  OBJECTS-$(CONFIG_SunOS) += src/xenstat_solaris.o
  OBJECTS-$(CONFIG_NetBSD) += src/xenstat_netbsd.o
-@@ -48,9 +48,11 @@ $(SHLIB): $(OBJECTS-y)
+@@ -64,9 +64,11 @@
  
  .PHONY: install
  install: all
@@ -28,22 +28,22 @@ Patch-Name: tools-xenstat-prefix.diff
  	$(INSTALL_DATA) $(LIB) $(DESTDIR)$(libdir)/libxenstat.a
 -	$(INSTALL_PROG) src/libxenstat.so $(DESTDIR)$(libdir)
 +	$(INSTALL_PROG) src/libxenstat.so $(DESTDIR)$(LIBEXEC_LIB)
+ 	$(INSTALL_DATA) xenstat.pc $(DESTDIR)$(PKG_INSTALLDIR)
  
- PYLIB=bindings/swig/python/_xenstat.so
- PYMOD=bindings/swig/python/xenstat.py
---- xen-4.8.2+xsa243.orig/tools/xenstat/xentop/Makefile
-+++ xen-4.8.2+xsa243/tools/xenstat/xentop/Makefile
-@@ -19,7 +19,9 @@ all install xentop:
+ .PHONY: uninstall
+--- a/tools/xenstat/xentop/Makefile
++++ b/tools/xenstat/xentop/Makefile
+@@ -19,7 +19,9 @@
  else
  
  CFLAGS += -DGCC_PRINTF -Werror $(CFLAGS_libxenstat)
 +LDFLAGS += $(call LDFLAGS_RPATH,../lib)
- LDLIBS += $(LDLIBS_libxenstat) $(CURSES_LIBS) $(TINFO_LIBS) $(SOCKET_LIBS) -lm -lyajl
+ LDLIBS += $(LDLIBS_libxenstat) $(CURSES_LIBS) $(TINFO_LIBS) $(SOCKET_LIBS) -lm
 +LDLIBS += $(LDLIBS_libxenctrl) $(LDLIBS_libxenstore)
  CFLAGS += -DHOST_$(XEN_OS)
  
  # Include configure output (config.h)
-@@ -31,8 +33,8 @@ all: xentop
+@@ -31,8 +33,8 @@
  
  .PHONY: install
  install: xentop
@@ -52,5 +52,5 @@ Patch-Name: tools-xenstat-prefix.diff
 +	$(INSTALL_DIR) $(DESTDIR)$(LIBEXEC_BIN)
 +	$(INSTALL_PROG) xentop $(DESTDIR)$(LIBEXEC_BIN)/xentop
  
- endif
- 
+ .PHONY: uninstall
+ uninstall:

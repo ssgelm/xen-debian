@@ -16,19 +16,20 @@
 #include <asm/current.h>
 #include <asm/flushtlb.h>
 #include <asm/hardirq.h>
+#include <asm/setup.h>
 
-static struct vcpu *__read_mostly override;
+static DEFINE_PER_CPU(struct vcpu *, override);
 
 static inline struct vcpu *mapcache_current_vcpu(void)
 {
     /* In the common case we use the mapcache of the running VCPU. */
-    struct vcpu *v = override ?: current;
+    struct vcpu *v = this_cpu(override) ?: current;
 
     /*
      * When current isn't properly set up yet, this is equivalent to
      * running in an idle vCPU (callers must check for NULL).
      */
-    if ( v == (struct vcpu *)0xfffff000 )
+    if ( v == INVALID_VCPU )
         return NULL;
 
     /*
@@ -36,7 +37,7 @@ static inline struct vcpu *mapcache_current_vcpu(void)
      * domain's page tables but current may point at another domain's VCPU.
      * Return NULL as though current is not properly set up yet.
      */
-    if ( efi_enabled && efi_rs_using_pgtables() )
+    if ( efi_rs_using_pgtables() )
         return NULL;
 
     /*
@@ -58,7 +59,7 @@ static inline struct vcpu *mapcache_current_vcpu(void)
 
 void __init mapcache_override_current(struct vcpu *v)
 {
-    override = v;
+    this_cpu(override) = v;
 }
 
 #define mapcache_l2_entry(e) ((e) >> PAGETABLE_ORDER)
@@ -165,7 +166,7 @@ void *map_domain_page(mfn_t mfn)
 
     spin_unlock(&dcache->lock);
 
-    l1e_write(&MAPCACHE_L1ENT(idx), l1e_from_pfn(mfn_x(mfn), __PAGE_HYPERVISOR_RW));
+    l1e_write(&MAPCACHE_L1ENT(idx), l1e_from_mfn(mfn, __PAGE_HYPERVISOR_RW));
 
  out:
     local_irq_restore(flags);
@@ -304,7 +305,10 @@ int mapcache_vcpu_init(struct vcpu *v)
 
 void *map_domain_page_global(mfn_t mfn)
 {
-    ASSERT(!in_irq() && local_irq_is_enabled());
+    ASSERT(!in_irq() &&
+           ((system_state >= SYS_STATE_boot &&
+             system_state < SYS_STATE_active) ||
+            local_irq_is_enabled()));
 
 #ifdef NDEBUG
     if ( mfn_x(mfn) <= PFN_DOWN(__pa(HYPERVISOR_VIRT_END - 1)) )

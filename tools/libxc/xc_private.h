@@ -36,6 +36,7 @@
 
 #include <xencall.h>
 #include <xenforeignmemory.h>
+#include <xendevicemodel.h>
 
 #include <xen/sys/privcmd.h>
 
@@ -97,6 +98,9 @@ struct xc_interface_core {
 
     /* Foreign mappings */
     xenforeignmemory_handle *fmem;
+
+    /* Device model */
+    xendevicemodel_handle *dmod;
 };
 
 int osdep_privcmd_open(xc_interface *xch);
@@ -410,14 +414,16 @@ int xc_ffs64(uint64_t x);
 /**
  * vm_event operations. Internal use only.
  */
-int xc_vm_event_control(xc_interface *xch, domid_t domain_id, unsigned int op,
+int xc_vm_event_control(xc_interface *xch, uint32_t domain_id, unsigned int op,
                         unsigned int mode, uint32_t *port);
 /*
  * Enables vm_event and returns the mapped ring page indicated by param.
  * param can be HVM_PARAM_PAGING/ACCESS/SHARING_RING_PFN
  */
-void *xc_vm_event_enable(xc_interface *xch, domid_t domain_id, int param,
+void *xc_vm_event_enable(xc_interface *xch, uint32_t domain_id, int param,
                          uint32_t *port);
+
+int do_dm_op(xc_interface *xch, uint32_t domid, unsigned int nr_bufs, ...);
 
 #endif /* __XC_PRIVATE_H__ */
 

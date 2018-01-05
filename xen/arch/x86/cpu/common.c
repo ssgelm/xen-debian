@@ -1,4 +1,3 @@
-#include <xen/config.h>
 #include <xen/init.h>
 #include <xen/string.h>
 #include <xen/delay.h>
@@ -180,16 +179,18 @@ void display_cacheinfo(struct cpuinfo_x86 *c)
 		       l2size, ecx & 0xFF);
 }
 
-int get_cpu_vendor(const char v[], enum get_cpu_vendor mode)
+int get_cpu_vendor(uint32_t b, uint32_t c, uint32_t d, enum get_cpu_vendor mode)
 {
 	int i;
 	static int printed;
 
 	for (i = 0; i < X86_VENDOR_NUM; i++) {
 		if (cpu_devs[i]) {
-			if (!strcmp(v,cpu_devs[i]->c_ident[0]) ||
-			    (cpu_devs[i]->c_ident[1] && 
-			     !strcmp(v,cpu_devs[i]->c_ident[1]))) {
+			struct {
+				uint32_t b, d, c;
+			} *ptr = (void *)cpu_devs[i]->c_ident;
+
+			if (ptr->b == b && ptr->c == c && ptr->d == d) {
 				if (mode == gcv_host)
 					this_cpu = cpu_devs[i];
 				return i;
@@ -239,21 +240,16 @@ static void __init early_cpu_detect(void)
 	c->x86_cache_alignment = 32;
 
 	/* Get vendor name */
-	cpuid(0x00000000, &c->cpuid_level,
-	      (int *)&c->x86_vendor_id[0],
-	      (int *)&c->x86_vendor_id[8],
-	      (int *)&c->x86_vendor_id[4]);
+	cpuid(0x00000000, &c->cpuid_level, &ebx, &ecx, &edx);
+	*(u32 *)&c->x86_vendor_id[0] = ebx;
+	*(u32 *)&c->x86_vendor_id[8] = ecx;
+	*(u32 *)&c->x86_vendor_id[4] = edx;
 
-	c->x86_vendor = get_cpu_vendor(c->x86_vendor_id, gcv_host);
+	c->x86_vendor = get_cpu_vendor(ebx, ecx, edx, gcv_host);
 
 	cpuid(0x00000001, &eax, &ebx, &ecx, &edx);
-	c->x86 = (eax >> 8) & 15;
-	c->x86_model = (eax >> 4) & 15;
-	if (c->x86 == 0xf)
-		c->x86 += (eax >> 20) & 0xff;
-	if (c->x86 >= 0x6)
-		c->x86_model += ((eax >> 16) & 0xF) << 4;
-	c->x86_mask = eax & 15;
+	c->x86 = get_cpu_family(eax, &c->x86_model, &c->x86_mask);
+
 	edx &= ~cleared_caps[cpufeat_word(X86_FEATURE_FPU)];
 	ecx &= ~cleared_caps[cpufeat_word(X86_FEATURE_SSE3)];
 	if (edx & cpufeat_mask(X86_FEATURE_CLFLUSH))
@@ -280,6 +276,8 @@ static void __init early_cpu_detect(void)
 		if (hap_paddr_bits > PADDR_BITS)
 			hap_paddr_bits = PADDR_BITS;
 	}
+
+	initialize_cpu_data(0);
 }
 
 static void generic_identify(struct cpuinfo_x86 *c)
@@ -287,24 +285,18 @@ static void generic_identify(struct cpuinfo_x86 *c)
 	u32 eax, ebx, ecx, edx, tmp;
 
 	/* Get vendor name */
-	cpuid(0x00000000, &c->cpuid_level,
-	      (int *)&c->x86_vendor_id[0],
-	      (int *)&c->x86_vendor_id[8],
-	      (int *)&c->x86_vendor_id[4]);
+	cpuid(0x00000000, &c->cpuid_level, &ebx, &ecx, &edx);
+	*(u32 *)&c->x86_vendor_id[0] = ebx;
+	*(u32 *)&c->x86_vendor_id[8] = ecx;
+	*(u32 *)&c->x86_vendor_id[4] = edx;
 
-	c->x86_vendor = get_cpu_vendor(c->x86_vendor_id, gcv_host);
+	c->x86_vendor = get_cpu_vendor(ebx, ecx, edx, gcv_host);
 	/* Initialize the standard set of capabilities */
 	/* Note that the vendor-specific code below might override */
 
 	/* Model and family information. */
 	cpuid(0x00000001, &eax, &ebx, &ecx, &edx);
-	c->x86 = (eax >> 8) & 15;
-	c->x86_model = (eax >> 4) & 15;
-	if (c->x86 == 0xf)
-		c->x86 += (eax >> 20) & 0xff;
-	if (c->x86 >= 0x6)
-		c->x86_model += ((eax >> 16) & 0xF) << 4;
-	c->x86_mask = eax & 15;
+	c->x86 = get_cpu_family(eax, &c->x86_model, &c->x86_mask);
 	c->apicid = phys_pkg_id((ebx >> 24) & 0xFF, 0);
 	c->phys_proc_id = c->apicid;
 
@@ -350,7 +342,7 @@ static void generic_identify(struct cpuinfo_x86 *c)
 		cpuid_count(0x00000007, 0, &tmp,
 			    &c->x86_capability[cpufeat_word(X86_FEATURE_FSGSBASE)],
 			    &c->x86_capability[cpufeat_word(X86_FEATURE_PKU)],
-			    &tmp);
+			    &c->x86_capability[cpufeat_word(X86_FEATURE_AVX512_4VNNIW)]);
 }
 
 /*
@@ -442,9 +434,9 @@ void identify_cpu(struct cpuinfo_x86 *c)
 		for ( i = 0 ; i < NCAPINTS ; i++ )
 			boot_cpu_data.x86_capability[i] &= c->x86_capability[i];
 
-		mcheck_init(c, 0);
+		mcheck_init(c, false);
 	} else {
-		mcheck_init(c, 1);
+		mcheck_init(c, true);
 
 		mtrr_bp_init();
 	}
@@ -671,14 +663,29 @@ void load_system_tables(void)
 		.limit = (IDT_ENTRIES * sizeof(idt_entry_t)) - 1,
 	};
 
-	/* Main stack for interrupts/exceptions. */
-	tss->rsp0 = stack_bottom;
-	tss->bitmap = IOBMP_INVALID_OFFSET;
+	*tss = (struct tss_struct){
+		/* Main stack for interrupts/exceptions. */
+		.rsp0 = stack_bottom,
 
-	/* MCE, NMI and Double Fault handlers get their own stacks. */
-	tss->ist[IST_MCE - 1] = stack_top + IST_MCE * PAGE_SIZE;
-	tss->ist[IST_DF  - 1] = stack_top + IST_DF  * PAGE_SIZE;
-	tss->ist[IST_NMI - 1] = stack_top + IST_NMI * PAGE_SIZE;
+		/* Ring 1 and 2 stacks poisoned. */
+		.rsp1 = 0x8600111111111111ul,
+		.rsp2 = 0x8600111111111111ul,
+
+		/*
+		 * MCE, NMI and Double Fault handlers get their own stacks.
+		 * All others poisoned.
+		 */
+		.ist = {
+			[IST_MCE - 1] = stack_top + IST_MCE * PAGE_SIZE,
+			[IST_DF  - 1] = stack_top + IST_DF  * PAGE_SIZE,
+			[IST_NMI - 1] = stack_top + IST_NMI * PAGE_SIZE,
+
+			[IST_MAX ... ARRAY_SIZE(tss->ist) - 1] =
+				0x8600111111111111ul,
+		},
+
+		.bitmap = IOBMP_INVALID_OFFSET,
+	};
 
 	_set_tssldt_desc(
 		gdt + TSS_ENTRY,

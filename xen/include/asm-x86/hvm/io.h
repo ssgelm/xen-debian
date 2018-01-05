@@ -19,6 +19,7 @@
 #ifndef __ASM_X86_HVM_IO_H__
 #define __ASM_X86_HVM_IO_H__
 
+#include <xen/mm.h>
 #include <asm/hvm/vpic.h>
 #include <asm/hvm/vioapic.h>
 #include <public/hvm/ioreq.h>
@@ -97,8 +98,6 @@ struct hvm_io_ops {
 int hvm_process_io_intercept(const struct hvm_io_handler *handler,
                              ioreq_t *p);
 
-const struct hvm_io_handler *hvm_find_io_handler(ioreq_t *p);
-
 int hvm_io_intercept(ioreq_t *p);
 
 struct hvm_io_handler *hvm_next_io_handler(struct domain *d);
@@ -118,10 +117,9 @@ void relocate_portio_handler(
 
 void send_timeoffset_req(unsigned long timeoff);
 void send_invalidate_req(void);
-int handle_mmio(void);
-int handle_mmio_with_translation(unsigned long gla, unsigned long gpfn,
-                                 struct npfec);
-int handle_pio(uint16_t port, unsigned int size, int dir);
+bool handle_mmio_with_translation(unsigned long gla, unsigned long gpfn,
+                                  struct npfec);
+bool handle_pio(uint16_t port, unsigned int size, int dir);
 void hvm_interrupt_post(struct vcpu *v, int vector, int type);
 void hvm_dpci_eoi(struct domain *d, unsigned int guest_irq,
                   const union vioapic_redir_entry *ent);
@@ -151,7 +149,16 @@ void stdvga_deinit(struct domain *d);
 
 extern void hvm_dpci_msi_eoi(struct domain *d, int vector);
 
-void register_dpci_portio_handler(struct domain *d);
+/* Decode a PCI port IO access into a bus/slot/func/reg. */
+unsigned int hvm_pci_decode_addr(unsigned int cf8, unsigned int addr,
+                                 unsigned int *bus, unsigned int *slot,
+                                 unsigned int *func);
+
+/*
+ * HVM port IO handler that performs forwarding of guest IO ports into machine
+ * IO ports.
+ */
+void register_g2m_portio_handler(struct domain *d);
 
 #endif /* __ASM_X86_HVM_IO_H__ */
 

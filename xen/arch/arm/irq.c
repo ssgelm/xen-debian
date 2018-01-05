@@ -17,7 +17,6 @@
  * GNU General Public License for more details.
  */
 
-#include <xen/config.h>
 #include <xen/lib.h>
 #include <xen/spinlock.h>
 #include <xen/irq.h>
@@ -316,7 +315,7 @@ void release_irq(unsigned int irq, const void *dev_id)
 static int __setup_irq(struct irq_desc *desc, unsigned int irqflags,
                        struct irqaction *new)
 {
-    bool_t shared = !!(irqflags & IRQF_SHARED);
+    bool shared = irqflags & IRQF_SHARED;
 
     ASSERT(new != NULL);
 
@@ -345,7 +344,7 @@ int setup_irq(unsigned int irq, unsigned int irqflags, struct irqaction *new)
     int rc;
     unsigned long flags;
     struct irq_desc *desc;
-    bool_t disabled;
+    bool disabled;
 
     desc = irq_to_desc(irq);
 
@@ -388,10 +387,10 @@ err:
     return rc;
 }
 
-bool_t is_assignable_irq(unsigned int irq)
+bool is_assignable_irq(unsigned int irq)
 {
     /* For now, we can only route SPIs to the guest */
-    return ((irq >= NR_LOCAL_IRQS) && (irq < gic_number_lines()));
+    return (irq >= NR_LOCAL_IRQS) && (irq < gic_number_lines());
 }
 
 /*
@@ -400,7 +399,7 @@ bool_t is_assignable_irq(unsigned int irq)
  *
  * XXX: See whether it is possible to let any domain configure the type.
  */
-bool_t irq_type_set_by_domain(const struct domain *d)
+bool irq_type_set_by_domain(const struct domain *d)
 {
     return (d == hardware_domain);
 }
@@ -481,20 +480,17 @@ int route_irq_to_guest(struct domain *d, unsigned int virq,
         {
             struct domain *ad = irq_get_domain(desc);
 
-            if ( d == ad )
-            {
-                if ( irq_get_guest_info(desc)->virq != virq )
-                {
-                    printk(XENLOG_G_ERR
-                           "d%u: IRQ %u is already assigned to vIRQ %u\n",
-                           d->domain_id, irq, irq_get_guest_info(desc)->virq);
-                    retval = -EBUSY;
-                }
-            }
-            else
+            if ( d != ad )
             {
                 printk(XENLOG_G_ERR "IRQ %u is already used by domain %u\n",
                        irq, ad->domain_id);
+                retval = -EBUSY;
+            }
+            else if ( irq_get_guest_info(desc)->virq != virq )
+            {
+                printk(XENLOG_G_ERR
+                       "d%u: IRQ %u is already assigned to vIRQ %u\n",
+                       d->domain_id, irq, irq_get_guest_info(desc)->virq);
                 retval = -EBUSY;
             }
         }
@@ -606,7 +602,7 @@ void pirq_set_affinity(struct domain *d, int pirq, const cpumask_t *mask)
     BUG();
 }
 
-static bool_t irq_validate_new_type(unsigned int curr, unsigned new)
+static bool irq_validate_new_type(unsigned int curr, unsigned new)
 {
     return (curr == IRQ_TYPE_INVALID || curr == new );
 }

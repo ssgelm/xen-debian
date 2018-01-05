@@ -1,4 +1,3 @@
-#include <xen/config.h>
 #include <xen/init.h>
 #include <xen/compile.h>
 #include <xen/lib.h>
@@ -13,6 +12,7 @@
 #include <xen/guest_access.h>
 #include <xen/iocap.h>
 #include <xen/acpi.h>
+#include <xen/warning.h>
 #include <acpi/actables.h>
 #include <asm/device.h>
 #include <asm/setup.h>
@@ -31,14 +31,13 @@ integer_param("dom0_max_vcpus", opt_dom0_max_vcpus);
 
 int dom0_11_mapping = 1;
 
-#define DOM0_MEM_DEFAULT 0x8000000 /* 128 MiB */
-static u64 __initdata dom0_mem = DOM0_MEM_DEFAULT;
+static u64 __initdata dom0_mem;
 
-static void __init parse_dom0_mem(const char *s)
+static int __init parse_dom0_mem(const char *s)
 {
     dom0_mem = parse_size_and_unit(s, &s);
-    if ( dom0_mem == 0 )
-        dom0_mem = DOM0_MEM_DEFAULT;
+
+    return *s ? -EINVAL : 0;
 }
 custom_param("dom0_mem", parse_dom0_mem);
 
@@ -47,6 +46,10 @@ struct map_range_data
     struct domain *d;
     p2m_type_t p2mt;
 };
+
+/* Override macros from asm/page.h to make them work with mfn_t */
+#undef virt_to_mfn
+#define virt_to_mfn(va) _mfn(__virt_to_mfn(va))
 
 //#define DEBUG_11_ALLOCATION
 #ifdef DEBUG_11_ALLOCATION
@@ -95,10 +98,10 @@ static unsigned int get_11_allocation_size(paddr_t size)
  * Returns false if the memory would be below bank 0 or we have run
  * out of banks. In this case it will free the pages.
  */
-static bool_t insert_11_bank(struct domain *d,
-                             struct kernel_info *kinfo,
-                             struct page_info *pg,
-                             unsigned int order)
+static bool insert_11_bank(struct domain *d,
+                           struct kernel_info *kinfo,
+                           struct page_info *pg,
+                           unsigned int order)
 {
     int res, i;
     paddr_t spfn;
@@ -201,9 +204,9 @@ fail:
  *    bank. Partly this is just easier for us to deal with, but also
  *    the ramdisk and DTB must be placed within a certain proximity of
  *    the kernel within RAM.
- * 3. For 32-bit dom0 we want to place as much of the RAM as we
- *    reasonably can below 4GB, so that it can be used by non-LPAE
- *    enabled kernels.
+ * 3. For dom0 we want to place as much of the RAM as we reasonably can
+ *    below 4GB, so that it can be used by non-LPAE enabled kernels (32-bit)
+ *    or when a device assigned to dom0 can only do 32-bit DMA access.
  * 4. For 32-bit dom0 the kernel must be located below 4GB.
  * 5. We want to have a few largers banks rather than many smaller ones.
  *
@@ -236,7 +239,8 @@ fail:
  * we give up.
  *
  * For 32-bit domain we require that the initial allocation for the
- * first bank is under 4G. Then for the subsequent allocations we
+ * first bank is under 4G. For 64-bit domain, the first bank is preferred
+ * to be allocated under 4G. Then for the subsequent allocations we
  * initially allocate memory only from below 4GB. Once that runs out
  * (as described above) we allow higher allocations and continue until
  * that runs out (or we have allocated sufficient dom0 memory).
@@ -250,7 +254,7 @@ static void allocate_memory(struct domain *d, struct kernel_info *kinfo)
     unsigned int order = get_11_allocation_size(kinfo->unassigned_mem);
     int i;
 
-    bool_t lowmem = is_32bit_domain(d);
+    bool lowmem = true;
     unsigned int bits;
 
     /*
@@ -275,20 +279,30 @@ static void allocate_memory(struct domain *d, struct kernel_info *kinfo)
         {
             pg = alloc_domheap_pages(d, order, MEMF_bits(bits));
             if ( pg != NULL )
+            {
+                if ( !insert_11_bank(d, kinfo, pg, order) )
+                    BUG(); /* Cannot fail for first bank */
+
                 goto got_bank0;
+            }
         }
         order--;
     }
 
-    panic("Unable to allocate first memory bank");
+    /* Failed to allocate bank0 under 4GB */
+    if ( is_32bit_domain(d) )
+        panic("Unable to allocate first memory bank.");
+
+    /* Try to allocate memory from above 4GB */
+    printk(XENLOG_INFO "No bank has been allocated below 4GB.\n");
+    lowmem = false;
 
  got_bank0:
 
-    if ( !insert_11_bank(d, kinfo, pg, order) )
-        BUG(); /* Cannot fail for first bank */
-
-    /* Now allocate more memory and fill in additional banks */
-
+    /*
+     * If we failed to allocate bank0 under 4GB, continue allocating
+     * memory from above 4GB and fill in banks.
+     */
     order = get_11_allocation_size(kinfo->unassigned_mem);
     while ( kinfo->unassigned_mem && kinfo->mem.nr_banks < NR_MEM_BANKS )
     {
@@ -664,7 +678,7 @@ static int make_cpus_node(const struct domain *d, void *fdt,
     /* Placeholder for cpu@ + a 32-bit number + \0 */
     char buf[15];
     u32 clock_frequency;
-    bool_t clock_valid;
+    bool clock_valid;
     uint64_t mpidr_aff;
 
     dt_dprintk("Create cpus node\n");
@@ -742,7 +756,8 @@ static int make_cpus_node(const struct domain *d, void *fdt,
         if ( res )
             return res;
 
-        if (clock_valid) {
+        if ( clock_valid )
+        {
             res = fdt_property_cell(fdt, "clock-frequency", clock_frequency);
             if ( res )
                 return res;
@@ -850,7 +865,7 @@ static int make_timer_node(const struct domain *d, void *fdt,
     unsigned int irq;
     gic_interrupt_t intrs[3];
     u32 clock_frequency;
-    bool_t clock_valid;
+    bool clock_valid;
 
     dt_dprintk("Create timer node\n");
 
@@ -910,7 +925,7 @@ static int make_timer_node(const struct domain *d, void *fdt,
 }
 
 static int map_irq_to_domain(struct domain *d, unsigned int irq,
-                             bool_t need_mapping, const char *devname)
+                             bool need_mapping, const char *devname)
 
 {
     int res;
@@ -952,7 +967,7 @@ static int map_dt_irq_to_domain(const struct dt_device_node *dev,
     struct domain *d = data;
     unsigned int irq = dt_irq->irq;
     int res;
-    bool_t need_mapping = !dt_device_for_passthrough(dev);
+    bool need_mapping = !dt_device_for_passthrough(dev);
 
     if ( irq < NR_LOCAL_IRQS )
     {
@@ -982,7 +997,7 @@ static int map_range_to_domain(const struct dt_device_node *dev,
 {
     struct map_range_data *mr_data = data;
     struct domain *d = mr_data->d;
-    bool_t need_mapping = !dt_device_for_passthrough(dev);
+    bool need_mapping = !dt_device_for_passthrough(dev);
     int res;
 
     res = iomem_permit_access(d, paddr_to_pfn(addr),
@@ -999,9 +1014,9 @@ static int map_range_to_domain(const struct dt_device_node *dev,
     if ( need_mapping )
     {
         res = map_regions_p2mt(d,
-                               _gfn(paddr_to_pfn(addr)),
-                               DIV_ROUND_UP(len, PAGE_SIZE),
-                               _mfn(paddr_to_pfn(addr)),
+                               gaddr_to_gfn(addr),
+                               PFN_UP(len),
+                               maddr_to_mfn(addr),
                                mr_data->p2mt);
 
         if ( res < 0 )
@@ -1066,7 +1081,7 @@ static int handle_device(struct domain *d, struct dt_device_node *dev,
     int res;
     struct dt_raw_irq rirq;
     u64 addr, size;
-    bool_t need_mapping = !dt_device_for_passthrough(dev);
+    bool need_mapping = !dt_device_for_passthrough(dev);
 
     nirq = dt_number_of_irq(dev);
     naddr = dt_number_of_address(dev);
@@ -1332,7 +1347,7 @@ static int acpi_iomem_deny_access(struct domain *d)
 {
     acpi_status status;
     struct acpi_table_spcr *spcr = NULL;
-    unsigned long gfn;
+    unsigned long mfn;
     int rc;
 
     /* Firstly permit full MMIO capabilities. */
@@ -1350,9 +1365,9 @@ static int acpi_iomem_deny_access(struct domain *d)
         return -EINVAL;
     }
 
-    gfn = spcr->serial_port.address >> PAGE_SHIFT;
+    mfn = spcr->serial_port.address >> PAGE_SHIFT;
     /* Deny MMIO access for UART */
-    rc = iomem_deny_access(d, gfn, gfn + 1);
+    rc = iomem_deny_access(d, mfn, mfn + 1);
     if ( rc )
         return rc;
 
@@ -1536,9 +1551,9 @@ static void acpi_map_other_tables(struct domain *d)
         addr = acpi_gbl_root_table_list.tables[i].address;
         size = acpi_gbl_root_table_list.tables[i].length;
         res = map_regions_p2mt(d,
-                               _gfn(paddr_to_pfn(addr)),
-                               DIV_ROUND_UP(size, PAGE_SIZE),
-                               _mfn(paddr_to_pfn(addr)),
+                               gaddr_to_gfn(addr),
+                               PFN_UP(size),
+                               maddr_to_mfn(addr),
                                p2m_mmio_direct_c);
         if ( res )
         {
@@ -1567,7 +1582,7 @@ static int acpi_create_rsdp(struct domain *d, struct membank tbl_add[])
     rsdp = acpi_os_map_memory(addr, table_size);
     base_ptr = d->arch.efi_acpi_table
                + acpi_get_table_offset(tbl_add, TBL_RSDP);
-    ACPI_MEMCPY(base_ptr, rsdp, table_size);
+    memcpy(base_ptr, rsdp, table_size);
     acpi_os_unmap_memory(rsdp, table_size);
 
     rsdp = (struct acpi_table_rsdp *)base_ptr;
@@ -1629,7 +1644,7 @@ static int acpi_create_xsdt(struct domain *d, struct membank tbl_add[])
                   / sizeof(u64);
     base_ptr = d->arch.efi_acpi_table
                + acpi_get_table_offset(tbl_add, TBL_XSDT);
-    ACPI_MEMCPY(base_ptr, table, table->length);
+    memcpy(base_ptr, table, table->length);
     acpi_os_unmap_memory(table, sizeof(struct acpi_table_header));
     acpi_os_unmap_memory(rsdp_tbl, sizeof(struct acpi_table_rsdp));
 
@@ -1672,10 +1687,10 @@ static int acpi_create_stao(struct domain *d, struct membank tbl_add[])
     }
 
     base_ptr = d->arch.efi_acpi_table + offset;
-    ACPI_MEMCPY(base_ptr, table, sizeof(struct acpi_table_header));
+    memcpy(base_ptr, table, sizeof(struct acpi_table_header));
 
     stao = (struct acpi_table_stao *)base_ptr;
-    ACPI_MEMCPY(stao->header.signature, ACPI_SIG_STAO, 4);
+    memcpy(stao->header.signature, ACPI_SIG_STAO, 4);
     stao->header.revision = 1;
     stao->header.length = table_size;
     stao->ignore_uart = 1;
@@ -1711,7 +1726,7 @@ static int acpi_create_madt(struct domain *d, struct membank tbl_add[])
     }
 
     base_ptr = d->arch.efi_acpi_table + offset;
-    ACPI_MEMCPY(base_ptr, table, table_size);
+    memcpy(base_ptr, table, table_size);
 
     /* Add Generic Distributor. */
     header = acpi_table_get_entry_madt(ACPI_MADT_TYPE_GENERIC_DISTRIBUTOR, 0);
@@ -1721,7 +1736,7 @@ static int acpi_create_madt(struct domain *d, struct membank tbl_add[])
         return -EINVAL;
     }
     gicd = container_of(header, struct acpi_madt_generic_distributor, header);
-    ACPI_MEMCPY(base_ptr + table_size, gicd,
+    memcpy(base_ptr + table_size, gicd,
                 sizeof(struct acpi_madt_generic_distributor));
     table_size += sizeof(struct acpi_madt_generic_distributor);
 
@@ -1767,7 +1782,7 @@ static int acpi_create_fadt(struct domain *d, struct membank tbl_add[])
     table_size = table->length;
     base_ptr = d->arch.efi_acpi_table
                + acpi_get_table_offset(tbl_add, TBL_FADT);
-    ACPI_MEMCPY(base_ptr, table, table_size);
+    memcpy(base_ptr, table, table_size);
     fadt = (struct acpi_table_fadt *)base_ptr;
 
     /* Set PSCI_COMPLIANT and PSCI_USE_HVC */
@@ -1794,12 +1809,7 @@ static int estimate_acpi_efi_size(struct domain *d, struct kernel_info *kinfo)
     acpi_size = ROUNDUP(sizeof(struct acpi_table_fadt), 8);
     acpi_size += ROUNDUP(sizeof(struct acpi_table_stao), 8);
 
-    madt_size = sizeof(struct acpi_table_madt)
-                + sizeof(struct acpi_madt_generic_interrupt) * d->max_vcpus
-                + sizeof(struct acpi_madt_generic_distributor);
-    if ( d->arch.vgic.version == GIC_V3 )
-        madt_size += sizeof(struct acpi_madt_generic_redistributor)
-                     * d->arch.vgic.nr_regions;
+    madt_size = gic_get_hwdom_madt_size(d);
     acpi_size += ROUNDUP(madt_size, 8);
 
     addr = acpi_os_get_root_pointer();
@@ -1893,9 +1903,9 @@ static int prepare_acpi(struct domain *d, struct kernel_info *kinfo)
 
     /* Map the EFI and ACPI tables to Dom0 */
     rc = map_regions_p2mt(d,
-                          _gfn(paddr_to_pfn(d->arch.efi_acpi_gpa)),
+                          gaddr_to_gfn(d->arch.efi_acpi_gpa),
                           PFN_UP(d->arch.efi_acpi_len),
-                          _mfn(paddr_to_pfn(virt_to_maddr(d->arch.efi_acpi_table))),
+                          virt_to_mfn(d->arch.efi_acpi_table),
                           p2m_mmio_direct_c);
     if ( rc != 0 )
     {
@@ -1992,21 +2002,21 @@ static void initrd_load(struct kernel_info *kinfo)
 
     for ( offs = 0; offs < len; )
     {
-        int rc;
-        paddr_t s, l, ma;
+        uint64_t par;
+        paddr_t s, l, ma = 0;
         void *dst;
 
         s = offs & ~PAGE_MASK;
         l = min(PAGE_SIZE - s, len);
 
-        rc = gvirt_to_maddr(load_addr + offs, &ma, GV2M_WRITE);
-        if ( rc )
+        par = gvirt_to_maddr(load_addr + offs, &ma, GV2M_WRITE);
+        if ( par )
         {
             panic("Unable to translate guest address");
             return;
         }
 
-        dst = map_domain_page(_mfn(paddr_to_pfn(ma)));
+        dst = map_domain_page(maddr_to_mfn(ma));
 
         copy_from_paddr(dst + s, paddr + offs, l);
 
@@ -2080,11 +2090,7 @@ static void __init find_gnttab_region(struct domain *d,
      * enough space for a large grant table
      */
     kinfo->gnttab_start = __pa(_stext);
-    kinfo->gnttab_size = (_etext - _stext) & PAGE_MASK;
-
-    /* Make sure the grant table will fit in the region */
-    if ( (kinfo->gnttab_size >> PAGE_SHIFT) < max_grant_frames )
-        panic("Cannot find a space for the grant table region\n");
+    kinfo->gnttab_size = gnttab_dom0_frames() << PAGE_SHIFT;
 
 #ifdef CONFIG_ARM_32
     /*
@@ -2115,6 +2121,12 @@ int construct_dom0(struct domain *d)
     BUG_ON(v->is_initialised);
 
     printk("*** LOADING DOMAIN 0 ***\n");
+    if ( dom0_mem <= 0 )
+    {
+        warning_add("PLEASE SPECIFY dom0_mem PARAMETER - USING 512M FOR NOW\n");
+        dom0_mem = MB(512);
+    }
+
 
     iommu_hwdom_init(d);
 
@@ -2134,6 +2146,10 @@ int construct_dom0(struct domain *d)
         return -EINVAL;
     }
     d->arch.type = kinfo.type;
+
+    if ( is_64bit_domain(d) )
+        vcpu_switch_to_aarch64_mode(v);
+
 #endif
 
     allocate_memory(d, &kinfo);
@@ -2181,9 +2197,6 @@ int construct_dom0(struct domain *d)
 
     discard_initial_modules();
 
-    v->is_initialised = 1;
-    clear_bit(_VPF_down, &v->pause_flags);
-
     memset(regs, 0, sizeof(*regs));
 
     regs->pc = (register_t)kinfo.entry;
@@ -2226,7 +2239,13 @@ int construct_dom0(struct domain *d)
             printk("Failed to allocate dom0 vcpu %d on pcpu %d\n", i, cpu);
             break;
         }
+
+        if ( is_64bit_domain(d) )
+            vcpu_switch_to_aarch64_mode(d->vcpu[i]);
     }
+
+    v->is_initialised = 1;
+    clear_bit(_VPF_down, &v->pause_flags);
 
     return 0;
 }

@@ -107,6 +107,7 @@ $(STAMPS_DIR)/install-utils_$(ARCH): CONFIG = \
 
 $(STAMPS_DIR)/build-utils_$(ARCH): DIR=$(BUILD_DIR)/build-utils_$(ARCH)
 $(STAMPS_DIR)/build-utils_$(ARCH): $(STAMPS_DIR)/setup-utils_$(ARCH)
+	+$(MAKE_CLEAN) -C $(DIR) $(CONFIG) build-tools-public-headers
 	+$(MAKE_CLEAN) -C $(DIR)/tools $(CONFIG)
 	touch $@
 
@@ -115,6 +116,8 @@ $(STAMPS_DIR)/install-utils_$(ARCH): INSTALL_DIR = $(BUILD_DIR)/install-utils_$(
 $(STAMPS_DIR)/install-utils_$(ARCH): $(STAMPS_DIR)/build-utils_$(ARCH)
 	@rm -rf $(INSTALL_DIR)
 	mkdir -p $(INSTALL_DIR)/$(OCAML_DLL_DIR)
+	+$(MAKE_CLEAN) -C $(DIR) install-tools-public-headers \
+	               DESTDIR=$(CURDIR)/$(INSTALL_DIR) $(CONFIG)
 	+$(MAKE_CLEAN) -C $(DIR)/tools install DESTDIR=$(CURDIR)/$(INSTALL_DIR) $(CONFIG)
 ifneq ($(filter i386 amd64,$(ARCH)),)
 	# hvmloader
@@ -173,7 +176,7 @@ endif
 install-libxen_$(ARCH): DIR = $(BUILD_DIR)/install-utils_$(ARCH)
 install-libxen_$(ARCH): PACKAGE_NAME = libxen-$(VERSION)
 install-libxen_$(ARCH): DH_OPTIONS = -p$(PACKAGE_NAME)
-install-libxen_$(ARCH): $(STAMPS_DIR)/install-utils_$(ARCH) install-libxenstore_$(ARCH)
+install-libxen_$(ARCH): $(STAMPS_DIR)/install-utils_$(ARCH)
 	dh_testdir
 	dh_testroot
 	dh_prep
@@ -222,6 +225,7 @@ install-utils_$(ARCH): $(STAMPS_DIR)/install-utils_$(ARCH) install-libxen_$(ARCH
 	dh_prep
 	install -D -m644 debian/xen-utils.NEWS $(PACKAGE_DIR)/usr/share/doc/$(PACKAGE_NAME)/NEWS
 	install -D -m644 debian/xen-utils.README.Debian $(PACKAGE_DIR)/usr/share/doc/$(PACKAGE_NAME)/README.Debian
+	cp $(DIR)/usr/sbin/* $(DIR)/usr/lib/xen-$(VERSION)/bin/
 	dh_install --sourcedir=$(DIR) usr/lib/xen-$(VERSION)
 	dh_install debian/templates/xen-utils.bug/* usr/share/bug/$(PACKAGE_NAME)
 	dh_lintian
@@ -256,7 +260,7 @@ install-utils-common: $(STAMPS_DIR)/install-utils-common
 install-xenstore-utils_$(ARCH): DIR = $(BUILD_DIR)/install-utils_$(ARCH)
 install-xenstore-utils_$(ARCH): PACKAGE_NAME = xenstore-utils
 install-xenstore-utils_$(ARCH): DH_OPTIONS = -p$(PACKAGE_NAME)
-install-xenstore-utils_$(ARCH): $(STAMPS_DIR)/install-utils_$(ARCH) install-libxenstore_$(ARCH)
+install-xenstore-utils_$(ARCH): $(STAMPS_DIR)/install-utils_$(ARCH) install-libxenstore_$(ARCH) 
 	dh_testdir
 	dh_testroot
 	dh_prep

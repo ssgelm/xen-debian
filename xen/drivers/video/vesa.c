@@ -4,7 +4,6 @@
  * VESA linear frame buffer handling.
  */
 
-#include <xen/config.h>
 #include <xen/init.h>
 #include <xen/lib.h>
 #include <xen/xmalloc.h>
@@ -30,12 +29,14 @@ static unsigned int vram_remap;
 integer_param("vesa-map", vram_remap);
 
 static int font_height;
-static void __init parse_font_height(const char *s)
+static int __init parse_font_height(const char *s)
 {
     if ( simple_strtoul(s, &s, 10) == 8 && (*s++ == 'x') )
         font_height = simple_strtoul(s, &s, 10);
     if ( *s != '\0' )
         font_height = 0;
+
+    return 0;
 }
 custom_param("font", parse_font_height);
 

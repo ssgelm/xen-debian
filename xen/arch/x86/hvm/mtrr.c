@@ -440,7 +440,7 @@ bool_t mtrr_fix_range_msr_set(struct domain *d, struct mtrr_state *m,
 bool_t mtrr_var_range_msr_set(
     struct domain *d, struct mtrr_state *m, uint32_t msr, uint64_t msr_content)
 {
-    uint32_t index, phys_addr, eax;
+    uint32_t index, phys_addr;
     uint64_t msr_mask;
     uint64_t *var_range_base = (uint64_t*)m->var_ranges;
 
@@ -452,15 +452,7 @@ bool_t mtrr_var_range_msr_set(
         return 0;
 
     if ( d == current->domain )
-    {
-        phys_addr = 36;
-        hvm_cpuid(0x80000000, &eax, NULL, NULL, NULL);
-        if ( (eax >> 16) == 0x8000 && eax >= 0x80000008 )
-        {
-            hvm_cpuid(0x80000008, &eax, NULL, NULL, NULL);
-            phys_addr = (uint8_t)eax;
-        }
-    }
+        phys_addr = d->arch.cpuid->extd.maxphysaddr;
     else
         phys_addr = paddr_bits;
     msr_mask = ~((((uint64_t)1) << phys_addr) - 1);
@@ -548,7 +540,7 @@ int hvm_get_mem_pinned_cacheattr(struct domain *d, gfn_t gfn,
     uint64_t mask = ~(uint64_t)0 << order;
     int rc = -ENXIO;
 
-    ASSERT(has_hvm_container_domain(d));
+    ASSERT(is_hvm_domain(d));
 
     rcu_read_lock(&pinned_cacheattr_rcu_lock);
     list_for_each_entry_rcu ( range,
@@ -800,7 +792,7 @@ int epte_get_entry_emt(struct domain *d, unsigned long gfn, mfn_t mfn,
         return MTRR_TYPE_WRBACK;
     }
 
-    if ( !mfn_valid(mfn_x(mfn)) )
+    if ( !mfn_valid(mfn) )
     {
         *ipat = 1;
         return MTRR_TYPE_UNCACHABLE;

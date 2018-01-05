@@ -7,9 +7,9 @@ Patch-Name: tools-xenmon-prefix.diff
 
 ---
 
---- xen-4.8.2+xsa243.orig/tools/xenmon/Makefile
-+++ xen-4.8.2+xsa243/tools/xenmon/Makefile
-@@ -18,6 +18,7 @@ CFLAGS  += $(CFLAGS_libxenevtchn)
+--- a/tools/xenmon/Makefile
++++ b/tools/xenmon/Makefile
+@@ -18,6 +18,7 @@
  CFLAGS  += $(CFLAGS_libxenctrl)
  LDLIBS  += $(LDLIBS_libxenctrl)
  LDLIBS  += $(LDLIBS_libxenevtchn)
@@ -17,7 +17,7 @@ Patch-Name: tools-xenmon-prefix.diff
  
  SCRIPTS = xenmon.py
  
-@@ -29,10 +30,10 @@ build: xentrace_setmask xenbaked
+@@ -29,10 +30,10 @@
  
  .PHONY: install
  install: build
@@ -30,5 +30,5 @@ Patch-Name: tools-xenmon-prefix.diff
 +	$(INSTALL_PROG) xentrace_setmask  $(DESTDIR)$(LIBEXEC_BIN)/xentrace_setmask
 +	$(INSTALL_PROG) xenmon.py  $(DESTDIR)$(LIBEXEC_BIN)/xenmon.py
  
- .PHONY: clean
- clean:
+ .PHONY: uninstall
+ uninstall:

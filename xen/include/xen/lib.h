@@ -56,6 +56,11 @@
 
 #define ARRAY_SIZE(x) (sizeof(x) / sizeof((x)[0]) + __must_be_array(x))
 
+#define __ACCESS_ONCE(x) ({                             \
+            (void)(typeof(x))0; /* Scalar typecheck. */ \
+            (volatile typeof(x) *)&(x); })
+#define ACCESS_ONCE(x) (*__ACCESS_ONCE(x))
+
 #define MASK_EXTR(v, m) (((v) & (m)) / ((m) & -(m)))
 #define MASK_INSR(v, m) (((v) * ((m) & -(m))) & (m))
 
@@ -66,7 +71,8 @@
 struct domain;
 
 void cmdline_parse(const char *cmdline);
-int parse_bool(const char *s);
+int runtime_parse(const char *line);
+int parse_bool(const char *s, const char *e);
 
 /*#define DEBUG_TRACE_DUMP*/
 #ifdef DEBUG_TRACE_DUMP

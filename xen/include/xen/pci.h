@@ -129,8 +129,8 @@ int pci_ro_device(int seg, int bus, int devfn);
 int pci_hide_device(int bus, int devfn);
 struct pci_dev *pci_get_pdev(int seg, int bus, int devfn);
 struct pci_dev *pci_get_real_pdev(int seg, int bus, int devfn);
-struct pci_dev *pci_get_pdev_by_domain(
-    struct domain *, int seg, int bus, int devfn);
+struct pci_dev *pci_get_pdev_by_domain(const struct domain *, int seg,
+                                       int bus, int devfn);
 void pci_check_disable_device(u16 seg, u8 bus, u8 devfn);
 
 uint8_t pci_conf_read8(
@@ -163,6 +163,9 @@ int pci_find_ext_capability(int seg, int bus, int devfn, int cap);
 int pci_find_next_ext_capability(int seg, int bus, int devfn, int pos, int cap);
 const char *parse_pci(const char *, unsigned int *seg, unsigned int *bus,
                       unsigned int *dev, unsigned int *func);
+const char *parse_pci_seg(const char *, unsigned int *seg, unsigned int *bus,
+                          unsigned int *dev, unsigned int *func, bool *def_seg);
+
 
 bool_t pcie_aer_get_firmware_first(const struct pci_dev *);
 

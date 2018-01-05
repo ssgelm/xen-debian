@@ -91,6 +91,15 @@ static void libxl__psr_cat_log_err_msg(libxl__gc *gc, int err)
     case ENXIO:
         msg = "Unable to set code or data CBM when CDP is disabled";
         break;
+    case EINVAL:
+        msg = "Invalid input or some internal values are not expected";
+        break;
+    case ERANGE:
+        msg = "Socket number is wrong";
+        break;
+    case ENOSPC:
+        msg = "Value array exceeds the range";
+        break;
 
     default:
         libxl__psr_log_err_msg(gc, err);
@@ -241,15 +250,15 @@ int libxl_psr_cmt_get_sample(libxl_ctx *ctx,
 
     rc = xc_psr_cmt_get_domain_rmid(ctx->xch, domid, &rmid);
     if (rc < 0 || rmid == 0) {
-        LOGE(ERROR, "fail to get the domain rmid, "
-            "or domain is not attached with platform QoS monitoring service");
+        LOGED(ERROR, domid, "fail to get the domain rmid, "
+              "or domain is not attached with platform QoS monitoring service");
         rc = ERROR_FAIL;
         goto out;
     }
 
     cpu = libxl__pick_socket_cpu(gc, scope);
     if (cpu < 0) {
-        LOGE(ERROR, "failed to get socket cpu");
+        LOGED(ERROR, domid, "failed to get socket cpu");
         rc = ERROR_FAIL;
         goto out;
     }
@@ -257,14 +266,14 @@ int libxl_psr_cmt_get_sample(libxl_ctx *ctx,
     rc = xc_psr_cmt_get_data(ctx->xch, rmid, cpu, type - 1,
                              &monitor_data, tsc_r);
     if (rc < 0) {
-        LOGE(ERROR, "failed to get monitoring data");
+        LOGED(ERROR, domid, "failed to get monitoring data");
         rc = ERROR_FAIL;
         goto out;
     }
 
     rc = xc_psr_cmt_get_l3_upscaling_factor(ctx->xch, &upscaling_factor);
     if (rc < 0) {
-        LOGE(ERROR, "failed to get L3 upscaling factor");
+        LOGED(ERROR, domid, "failed to get L3 upscaling factor");
         rc = ERROR_FAIL;
         goto out;
     }
@@ -311,7 +320,7 @@ int libxl_psr_cat_set_cbm(libxl_ctx *ctx, uint32_t domid,
 
     rc = libxl__count_physical_sockets(gc, &nr_sockets);
     if (rc) {
-        LOGE(ERROR, "failed to get system socket count");
+        LOGED(ERROR, domid, "failed to get system socket count");
         goto out;
     }
 
@@ -352,8 +361,8 @@ int libxl_psr_cat_get_cbm(libxl_ctx *ctx, uint32_t domid,
     return rc;
 }
 
-int libxl_psr_cat_get_l3_info(libxl_ctx *ctx, libxl_psr_cat_info **info,
-                              int *nr)
+int libxl_psr_cat_get_info(libxl_ctx *ctx, libxl_psr_cat_info **info,
+                           unsigned int *nr, unsigned int lvl)
 {
     GC_INIT(ctx);
     int rc;
@@ -380,9 +389,8 @@ int libxl_psr_cat_get_l3_info(libxl_ctx *ctx, libxl_psr_cat_info **info,
 
     libxl_for_each_set_bit(socketid, socketmap) {
         ptr[i].id = socketid;
-        if (xc_psr_cat_get_l3_info(ctx->xch, socketid, &ptr[i].cos_max,
-                                   &ptr[i].cbm_len, &ptr[i].cdp_enabled)) {
-            libxl__psr_cat_log_err_msg(gc, errno);
+        if (xc_psr_cat_get_info(ctx->xch, socketid, lvl, &ptr[i].cos_max,
+                                &ptr[i].cbm_len, &ptr[i].cdp_enabled)) {
             rc = ERROR_FAIL;
             free(ptr);
             goto out;
@@ -395,6 +403,19 @@ int libxl_psr_cat_get_l3_info(libxl_ctx *ctx, libxl_psr_cat_info **info,
 out:
     libxl_bitmap_dispose(&socketmap);
     GC_FREE;
+    return rc;
+}
+
+int libxl_psr_cat_get_l3_info(libxl_ctx *ctx, libxl_psr_cat_info **info,
+                              int *nr)
+{
+    int rc;
+    unsigned int num;
+
+    rc = libxl_psr_cat_get_info(ctx, info, &num, 3);
+    if (!rc)
+        *nr = num;
+
     return rc;
 }
 

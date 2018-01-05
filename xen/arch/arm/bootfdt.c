@@ -7,7 +7,6 @@
  * it under the terms of the GNU General Public License version 2 as
  * published by the Free Software Foundation.
  */
-#include <xen/config.h>
 #include <xen/types.h>
 #include <xen/lib.h>
 #include <xen/kernel.h>
@@ -17,8 +16,8 @@
 #include <xsm/xsm.h>
 #include <asm/setup.h>
 
-static bool_t __init device_tree_node_matches(const void *fdt, int node,
-                                              const char *match)
+static bool __init device_tree_node_matches(const void *fdt, int node,
+                                            const char *match)
 {
     const char *name;
     size_t match_len;
@@ -32,8 +31,8 @@ static bool_t __init device_tree_node_matches(const void *fdt, int node,
         && (name[match_len] == '@' || name[match_len] == '\0');
 }
 
-static bool_t __init device_tree_node_compatible(const void *fdt, int node,
-                                                 const char *match)
+static bool __init device_tree_node_compatible(const void *fdt, int node,
+                                               const char *match)
 {
     int len, l;
     int mlen;
@@ -43,17 +42,17 @@ static bool_t __init device_tree_node_compatible(const void *fdt, int node,
 
     prop = fdt_getprop(fdt, node, "compatible", &len);
     if ( prop == NULL )
-        return 0;
+        return false;
 
     while ( len > 0 ) {
         if ( !dt_compat_cmp(prop, match) )
-            return 1;
+            return true;
         l = strlen(prop) + 1;
         prop += l;
         len -= l;
     }
 
-    return 0;
+    return false;
 }
 
 static void __init device_tree_get_reg(const __be32 **cell, u32 address_cells,
@@ -168,7 +167,7 @@ static void __init process_multiboot_node(const void *fdt, int node,
                                           const char *name,
                                           u32 address_cells, u32 size_cells)
 {
-    static int kind_guess = 0;
+    static int __initdata kind_guess = 0;
     const struct fdt_property *prop;
     const __be32 *cell;
     bootmodule_kind kind;

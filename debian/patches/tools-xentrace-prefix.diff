@@ -7,9 +7,9 @@ Patch-Name: tools-xentrace-prefix.diff
 
 ---
 
---- xen-4.8.2+xsa243.orig/tools/xentrace/Makefile
-+++ xen-4.8.2+xsa243/tools/xentrace/Makefile
-@@ -8,6 +8,7 @@ CFLAGS += $(CFLAGS_libxenctrl)
+--- a/tools/xentrace/Makefile
++++ b/tools/xentrace/Makefile
+@@ -8,6 +8,7 @@
  LDLIBS += $(LDLIBS_libxenevtchn)
  LDLIBS += $(LDLIBS_libxenctrl)
  LDLIBS += $(ARGP_LDFLAGS)
@@ -17,7 +17,7 @@ Patch-Name: tools-xentrace-prefix.diff
  
  BIN-$(CONFIG_X86) = xenalyze
  BIN      = $(BIN-y)
-@@ -23,15 +24,9 @@ build: $(BIN) $(SBIN) $(LIBBIN)
+@@ -23,15 +24,9 @@
  
  .PHONY: install
  install: build
@@ -34,5 +34,5 @@ Patch-Name: tools-xentrace-prefix.diff
 +	$(INSTALL_PROG) $(BIN) $(SBIN) $(LIBBIN) $(DESTDIR)$(LIBEXEC_BIN)
 +	$(INSTALL_PYTHON_PROG) $(SCRIPTS) $(DESTDIR)$(LIBEXEC_BIN)
  
- .PHONY: clean
- clean:
+ .PHONY: uninstall
+ uninstall:

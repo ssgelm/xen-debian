@@ -7,9 +7,9 @@ Patch-Name: tools-xenstore-prefix.diff
 
 ---
 
---- xen-4.8.2+xsa243.orig/tools/helpers/Makefile
-+++ xen-4.8.2+xsa243/tools/helpers/Makefile
-@@ -31,7 +31,7 @@ xen-init-dom0: $(XEN_INIT_DOM0_OBJS)
+--- a/tools/helpers/Makefile
++++ b/tools/helpers/Makefile
+@@ -31,7 +31,7 @@
  $(INIT_XENSTORE_DOMAIN_OBJS): _paths.h
  
  init-xenstore-domain: $(INIT_XENSTORE_DOMAIN_OBJS)
@@ -18,9 +18,9 @@ Patch-Name: tools-xenstore-prefix.diff
  
  .PHONY: install
  install: all
---- xen-4.8.2+xsa243.orig/tools/xenstore/Makefile
-+++ xen-4.8.2+xsa243/tools/xenstore/Makefile
-@@ -20,6 +20,8 @@ LDFLAGS-$(CONFIG_SYSTEMD) += $(SYSTEMD_L
+--- a/tools/xenstore/Makefile
++++ b/tools/xenstore/Makefile
+@@ -21,6 +21,8 @@
  CFLAGS  += $(CFLAGS-y)
  LDFLAGS += $(LDFLAGS-y)
  
@@ -29,7 +29,7 @@ Patch-Name: tools-xenstore-prefix.diff
  CLIENTS := xenstore-exists xenstore-list xenstore-read xenstore-rm xenstore-chmod
  CLIENTS += xenstore-write xenstore-ls xenstore-watch
  
-@@ -74,7 +76,7 @@ endif
+@@ -77,7 +79,7 @@
  $(XENSTORED_OBJS): CFLAGS += $(CFLAGS_libxengnttab)
  
  xenstored: $(XENSTORED_OBJS)
@@ -38,7 +38,7 @@ Patch-Name: tools-xenstore-prefix.diff
  
  xenstored.a: $(XENSTORED_OBJS)
  	$(AR) cr $@ $^
-@@ -127,13 +129,13 @@ tarball: clean
+@@ -150,13 +152,13 @@
  install: all
  	$(INSTALL_DIR) $(DESTDIR)$(bindir)
  	$(INSTALL_DIR) $(DESTDIR)$(includedir)

@@ -7,8 +7,8 @@ Patch-Name: tools-blktap2-prefix.diff
 
 ---
 
---- xen-4.8.2+xsa243.orig/tools/blktap2/control/Makefile
-+++ xen-4.8.2+xsa243/tools/blktap2/control/Makefile
+--- a/tools/blktap2/control/Makefile
++++ b/tools/blktap2/control/Makefile
 @@ -1,10 +1,7 @@
  XEN_ROOT := $(CURDIR)/../../../
  include $(XEN_ROOT)/tools/Rules.mk
@@ -20,7 +20,7 @@ Patch-Name: tools-blktap2-prefix.diff
  
  IBIN               = tap-ctl
  
-@@ -38,39 +35,32 @@ OBJS = $(CTL_OBJS) tap-ctl.o
+@@ -38,7 +35,7 @@
  PICS = $(CTL_PICS)
  
  LIB_STATIC = $(LIBNAME).a
@@ -28,49 +28,10 @@ Patch-Name: tools-blktap2-prefix.diff
 +LIB_SHARED = $(LIBNAME).so
  IBIN = tap-ctl
  
- all: build
- 
- build: $(IBIN) $(LIB_STATIC) $(LIB_SHARED)
- 
--$(LIBNAME).so: $(LIBSONAME)
--	ln -sf $< $@
--
--$(LIBSONAME): $(LIB_SHARED)
--	ln -sf $< $@
--
- tap-ctl: tap-ctl.o $(LIBNAME).so
--	$(CC) $(LDFLAGS) -o $@ $^ $(APPEND_LDFLAGS)
-+	$(CC) $(LDFLAGS) $(call LDFLAGS_RPATH,../lib) -o $@ $^ $(APPEND_LDFLAGS)
- 
- $(LIB_STATIC): $(CTL_OBJS)
- 	$(AR) r $@ $^
- 
- $(LIB_SHARED): $(CTL_PICS)
--	$(CC) $(LDFLAGS) -fPIC  -Wl,$(SONAME_LDFLAG) -Wl,$(LIBSONAME) $(SHLIB_LDFLAGS) -rdynamic $^ -o $@  $(APPEND_LDFLAGS)
-+	$(CC) $(LDFLAGS) -fPIC $(SHLIB_LDFLAGS) -rdynamic $^ -o $@ $(APPEND_LDFLAGS)
- 
- install: $(IBIN) $(LIB_STATIC) $(LIB_SHARED)
--	$(INSTALL_DIR) -p $(DESTDIR)$(sbindir)
--	$(INSTALL_PROG) $(IBIN) $(DESTDIR)$(sbindir)
-+	$(INSTALL_DIR) -p $(DESTDIR)$(libdir)
-+	$(INSTALL_DIR) -p $(DESTDIR)$(LIBEXEC_BIN)
-+	$(INSTALL_DIR) -p $(DESTDIR)$(LIBEXEC_LIB)
-+	$(INSTALL_PROG) $(IBIN) $(DESTDIR)$(LIBEXEC_BIN)
- 	$(INSTALL_DATA) $(LIB_STATIC) $(DESTDIR)$(libdir)
--	$(INSTALL_PROG) $(LIB_SHARED) $(DESTDIR)$(libdir)
--	ln -sf $(LIBSONAME) $(DESTDIR)$(libdir)/$(LIBNAME).so
--	ln -sf $(LIB_SHARED) $(DESTDIR)$(libdir)/$(LIBSONAME)
-+	$(INSTALL_PROG) $(LIB_SHARED) $(DESTDIR)$(LIBEXEC_LIB)
- 
- clean:
- 	rm -f $(OBJS) $(PICS) $(DEPS) $(IBIN) $(LIB_STATIC) $(LIB_SHARED)
--	rm -f $(LIBNAME).so $(LIBSONAME)
- 	rm -f *~
- 
- distclean: clean
---- xen-4.8.2+xsa243.orig/tools/blktap2/vhd/Makefile
-+++ xen-4.8.2+xsa243/tools/blktap2/vhd/Makefile
-@@ -12,6 +12,7 @@ CFLAGS            += -Werror
+ PKG_CONFIG := xenblktapctl.pc
+--- a/tools/blktap2/vhd/Makefile
++++ b/tools/blktap2/vhd/Makefile
+@@ -12,6 +12,7 @@
  CFLAGS            += -Wno-unused
  CFLAGS            += -I../include
  CFLAGS            += -D_GNU_SOURCE
@@ -78,9 +39,9 @@ Patch-Name: tools-blktap2-prefix.diff
  
  ifeq ($(CONFIG_X86_64),y)
  CFLAGS            += -fPIC
---- xen-4.8.2+xsa243.orig/tools/blktap2/vhd/lib/Makefile
-+++ xen-4.8.2+xsa243/tools/blktap2/vhd/lib/Makefile
-@@ -2,25 +2,19 @@ XEN_ROOT=$(CURDIR)/../../../..
+--- a/tools/blktap2/vhd/lib/Makefile
++++ b/tools/blktap2/vhd/lib/Makefile
+@@ -2,25 +2,19 @@
  BLKTAP_ROOT := ../..
  include $(XEN_ROOT)/tools/Rules.mk
  
@@ -108,7 +69,7 @@ Patch-Name: tools-blktap2-prefix.diff
  
  ifeq ($(CONFIG_LIBICONV),y)
  LIBS            += -liconv
-@@ -50,27 +44,22 @@ LIB-OBJS        += $(LVM-UTIL-OBJ)
+@@ -50,27 +44,22 @@
  
  LIB-PICOBJS      = $(patsubst %.o,%.opic,$(LIB-OBJS))
  
@@ -141,5 +102,5 @@ Patch-Name: tools-blktap2-prefix.diff
 +	$(INSTALL_DATA) libvhd.a $(DESTDIR)$(libdir)
 +	$(INSTALL_PROG) libvhd.so $(DESTDIR)$(libdir)
  
- clean:
- 	rm -rf *.a *.so* *.o *.opic *~ $(DEPS) $(LIBVHD)
+ uninstall:
+ 	rm -f $(DESTDIR)$(INST-DIR)/libvhd.so

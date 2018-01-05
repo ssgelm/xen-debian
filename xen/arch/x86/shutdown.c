@@ -4,7 +4,6 @@
  * x86-specific shutdown handling.
  */
 
-#include <xen/config.h>
 #include <xen/init.h>
 #include <xen/lib.h>
 #include <xen/sched.h>
@@ -52,8 +51,11 @@ static int reboot_mode;
  * efi    Use the EFI reboot (if running under EFI)
  */
 static enum reboot_type reboot_type = BOOT_INVALID;
-static void __init set_reboot_type(char *str)
+
+static int __init set_reboot_type(const char *str)
 {
+    int rc = 0;
+
     for ( ; ; )
     {
         switch ( *str )
@@ -75,11 +77,23 @@ static void __init set_reboot_type(char *str)
         case 't':
             reboot_type = *str;
             break;
+        default:
+            rc = -EINVAL;
+            break;
         }
         if ( (str = strchr(str, ',')) == NULL )
             break;
         str++;
     }
+
+    if ( reboot_type == BOOT_EFI && !efi_enabled(EFI_RS) )
+    {
+        printk("EFI reboot selected, but no EFI runtime services available.\n"
+               "Falling back to default reboot type.\n");
+        reboot_type = BOOT_INVALID;
+    }
+
+    return rc;
 }
 custom_param("reboot", set_reboot_type);
 
@@ -116,7 +130,7 @@ void machine_halt(void)
 static void default_reboot_type(void)
 {
     if ( reboot_type == BOOT_INVALID )
-        reboot_type = efi_enabled ? BOOT_EFI
+        reboot_type = efi_enabled(EFI_RS) ? BOOT_EFI
                                   : acpi_disabled ? BOOT_KBD
                                                   : BOOT_ACPI;
 }
@@ -125,11 +139,15 @@ static int __init override_reboot(struct dmi_system_id *d)
 {
     enum reboot_type type = (long)d->driver_data;
 
+    if ( type == BOOT_ACPI && acpi_disabled )
+        type = BOOT_KBD;
+
     if ( reboot_type != type )
     {
         static const char *__initdata msg[] =
         {
             [BOOT_KBD]  = "keyboard controller",
+            [BOOT_ACPI] = "ACPI",
             [BOOT_CF9]  = "PCI",
         };
 
@@ -433,6 +451,15 @@ static struct dmi_system_id __initdata reboot_dmi_table[] = {
         .matches = {
             DMI_MATCH(DMI_SYS_VENDOR, "Dell Inc."),
             DMI_MATCH(DMI_PRODUCT_NAME, "OptiPlex 390"),
+        },
+    },
+    {    /* Handle problems with rebooting on Dell OptiPlex 9020. */
+        .callback = override_reboot,
+        .driver_data = (void *)(long)BOOT_ACPI,
+        .ident = "Dell OptiPlex 9020",
+        .matches = {
+            DMI_MATCH(DMI_SYS_VENDOR, "Dell Inc."),
+            DMI_MATCH(DMI_PRODUCT_NAME, "OptiPlex 9020"),
         },
     },
     {    /* Handle problems with rebooting on the Latitude E6320. */

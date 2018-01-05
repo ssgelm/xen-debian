@@ -7,7 +7,6 @@
  * copied from Linux
  */
 
-#include <xen/config.h>
 #include <xen/init.h>
 #include <xen/mm.h>
 #include <xen/acpi.h>
@@ -141,7 +140,7 @@ int pci_mmcfg_arch_enable(unsigned int idx)
 
     if (pci_mmcfg_virt[idx].virt)
         return 0;
-    pci_mmcfg_virt[idx].virt = mcfg_ioremap(cfg, idx, PAGE_HYPERVISOR_NOCACHE);
+    pci_mmcfg_virt[idx].virt = mcfg_ioremap(cfg, idx, PAGE_HYPERVISOR_UC);
     if (!pci_mmcfg_virt[idx].virt) {
         printk(KERN_ERR "PCI: Cannot map MCFG aperture for segment %04x\n",
                cfg->pci_segment);

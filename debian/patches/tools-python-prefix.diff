@@ -7,9 +7,9 @@ Patch-Name: tools-python-prefix.diff
 
 ---
 
---- xen-4.8.2+xsa243.orig/tools/python/setup.py
-+++ xen-4.8.2+xsa243/tools/python/setup.py
-@@ -5,6 +5,7 @@ import os, sys
+--- a/tools/python/setup.py
++++ b/tools/python/setup.py
+@@ -5,6 +5,7 @@
  XEN_ROOT = "../.."
  
  extra_compile_args  = [ "-fno-strict-aliasing", "-Werror" ]
@@ -17,7 +17,7 @@ Patch-Name: tools-python-prefix.diff
  
  PATH_XEN      = XEN_ROOT + "/tools/include"
  PATH_LIBXENTOOLLOG = XEN_ROOT + "/tools/libs/toollog"
-@@ -23,11 +24,12 @@ xc = Extension("xc",
+@@ -23,11 +24,12 @@
                 library_dirs       = [ PATH_LIBXC ],
                 libraries          = [ "xenctrl", "xenguest" ],
                 depends            = [ PATH_LIBXC + "/libxenctrl.so", PATH_LIBXC + "/libxenguest.so" ],

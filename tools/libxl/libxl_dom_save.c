@@ -90,9 +90,9 @@ static void domain_suspend_switch_qemu_xen_traditional_logdirty
             if (rc) goto out;
 
             if (!got_ret || strcmp(got, got_ret)) {
-                LOG(ERROR,"controlling logdirty: qemu was already sent"
-                    " command `%s' (xenstore path `%s') but result is `%s'",
-                    got, lds->cmd_path, got_ret ? got_ret : "<none>");
+                LOGD(ERROR, domid, "controlling logdirty: qemu was already sent"
+                     " command `%s' (xenstore path `%s') but result is `%s'",
+                     got, lds->cmd_path, got_ret ? got_ret : "<none>");
                 rc = ERROR_FAIL;
                 goto out;
             }
@@ -115,7 +115,7 @@ static void domain_suspend_switch_qemu_xen_traditional_logdirty
     return;
 
  out:
-    LOG(ERROR,"logdirty switch failed (rc=%d), abandoning suspend",rc);
+    LOGD(ERROR, domid, "logdirty switch failed (rc=%d), abandoning suspend",rc);
     libxl__xs_transaction_abort(gc, &t);
     switch_logdirty_done(egc,lds,rc);
 }
@@ -129,7 +129,8 @@ static void domain_suspend_switch_qemu_xen_logdirty
 
     rc = libxl__qmp_set_global_dirty_log(gc, domid, enable);
     if (rc)
-        LOG(ERROR,"logdirty switch failed (rc=%d), abandoning suspend",rc);
+        LOGD(ERROR, domid,
+             "logdirty switch failed (rc=%d), abandoning suspend",rc);
 
     lds->callback(egc, lds, rc);
 }
@@ -148,7 +149,7 @@ static void domain_suspend_switch_qemu_logdirty_done
 }
 
 void libxl__domain_suspend_common_switch_qemu_logdirty
-                               (int domid, unsigned enable, void *user)
+                               (uint32_t domid, unsigned enable, void *user)
 {
     libxl__save_helper_state *shs = user;
     libxl__egc *egc = shs->egc;
@@ -156,6 +157,11 @@ void libxl__domain_suspend_common_switch_qemu_logdirty
 
     /* Convenience aliases. */
     libxl__logdirty_switch *const lds = &dss->logdirty;
+
+    if (dss->type == LIBXL_DOMAIN_TYPE_PVH) {
+        domain_suspend_switch_qemu_logdirty_done(egc, lds, 0);
+        return;
+    }
 
     lds->callback = domain_suspend_switch_qemu_logdirty_done;
     libxl__domain_common_switch_qemu_logdirty(egc, domid, enable, lds);
@@ -175,12 +181,9 @@ void libxl__domain_common_switch_qemu_logdirty(libxl__egc *egc,
     case LIBXL_DEVICE_MODEL_VERSION_QEMU_XEN:
         domain_suspend_switch_qemu_xen_logdirty(egc, domid, enable, lds);
         break;
-    case LIBXL_DEVICE_MODEL_VERSION_NONE:
-        lds->callback(egc, lds, 0);
-        break;
     default:
-        LOG(ERROR,"logdirty switch failed"
-            ", no valid device model version found, abandoning suspend");
+        LOGD(ERROR, domid, "logdirty switch failed"
+             ", no valid device model version found, abandoning suspend");
         lds->callback(egc, lds, ERROR_FAIL);
     }
 }
@@ -346,8 +349,8 @@ void libxl__domain_save(libxl__egc *egc, libxl__domain_save_state *dss)
     libxl__domain_suspend_state *dsps = &dss->dsps;
 
     if (dss->checkpointed_stream != LIBXL_CHECKPOINTED_STREAM_NONE && !r_info) {
-        LOG(ERROR, "Migration stream is checkpointed, but there's no "
-                   "checkpoint info!");
+        LOGD(ERROR, domid, "Migration stream is checkpointed, but there's no "
+                           "checkpoint info!");
         rc = ERROR_INVAL;
         goto out;
     }
@@ -362,6 +365,7 @@ void libxl__domain_save(libxl__egc *egc, libxl__domain_save_state *dss)
     if (rc) goto out;
 
     switch (type) {
+    case LIBXL_DOMAIN_TYPE_PVH:
     case LIBXL_DOMAIN_TYPE_HVM: {
         dss->hvm = 1;
         break;
@@ -387,7 +391,7 @@ void libxl__domain_save(libxl__egc *egc, libxl__domain_save_state *dss)
     ret = xc_domain_getvnuma(CTX->xch, domid, &nr_vnodes, &nr_vmemranges,
                              &nr_vcpus, NULL, NULL, NULL);
     if (ret != -1 || errno != EOPNOTSUPP) {
-        LOG(ERROR, "Cannot save a guest with vNUMA configured");
+        LOGD(ERROR, domid, "Cannot save a guest with vNUMA configured");
         rc = ERROR_FAIL;
         goto out;
     }
@@ -491,17 +495,17 @@ int libxl__restore_emulator_xenstore_data(libxl__domain_create_state *dcs,
         /* Sanitise 'key'. */
         if (!next) {
             rc = ERROR_FAIL;
-            LOG(ERROR, "Key in xenstore data not NUL terminated");
+            LOGD(ERROR, domid, "Key in xenstore data not NUL terminated");
             goto out;
         }
         if (key[0] == '\0') {
             rc = ERROR_FAIL;
-            LOG(ERROR, "empty key found in xenstore data");
+            LOGD(ERROR, domid, "empty key found in xenstore data");
             goto out;
         }
         if (key[0] == '/') {
             rc = ERROR_FAIL;
-            LOG(ERROR, "Key in xenstore data not relative");
+            LOGD(ERROR, domid, "Key in xenstore data not relative");
             goto out;
         }
 
@@ -511,7 +515,7 @@ int libxl__restore_emulator_xenstore_data(libxl__domain_create_state *dcs,
         /* Sanitise 'val'. */
         if (!next) {
             rc = ERROR_FAIL;
-            LOG(ERROR, "Val in xenstore data not NUL terminated");
+            LOGD(ERROR, domid, "Val in xenstore data not NUL terminated");
             goto out;
         }
 

@@ -7,9 +7,9 @@ Patch-Name: tools-misc-prefix.diff
 
 ---
 
---- xen-4.8.2+xsa243.orig/tools/misc/Makefile
-+++ xen-4.8.2+xsa243/tools/misc/Makefile
-@@ -54,12 +54,8 @@ all build: $(TARGETS_BUILD)
+--- a/tools/misc/Makefile
++++ b/tools/misc/Makefile
+@@ -55,12 +55,8 @@
  
  .PHONY: install
  install: build
@@ -21,5 +21,5 @@ Patch-Name: tools-misc-prefix.diff
 -	$(INSTALL_PYTHON_PROG) $(INSTALL_PRIVBIN) $(DESTDIR)$(LIBEXEC_BIN)
 +	$(INSTALL_PYTHON_PROG) $(INSTALL_BIN) $(INSTALL_SBIN) $(INSTALL_PRIVBIN) $(DESTDIR)$(LIBEXEC_BIN)
  
- .PHONY: clean
- clean:
+ .PHONY: uninstall
+ uninstall:

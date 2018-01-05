@@ -4,7 +4,6 @@
  * Generic domain-handling functions.
  */
 
-#include <xen/config.h>
 #include <xen/compat.h>
 #include <xen/init.h>
 #include <xen/lib.h>
@@ -117,7 +116,7 @@ static void vcpu_info_reset(struct vcpu *v)
     v->vcpu_info = ((v->vcpu_id < XEN_LEGACY_MAX_VCPUS)
                     ? (vcpu_info_t *)&shared_info(d, vcpu_info[v->vcpu_id])
                     : &dummy_vcpu_info);
-    v->vcpu_info_mfn = mfn_x(INVALID_MFN);
+    v->vcpu_info_mfn = INVALID_MFN;
 }
 
 struct vcpu *alloc_vcpu(
@@ -246,12 +245,15 @@ static int late_hwdom_init(struct domain *d)
 
 static unsigned int __read_mostly extra_hwdom_irqs;
 static unsigned int __read_mostly extra_domU_irqs = 32;
-static void __init parse_extra_guest_irqs(const char *s)
+
+static int __init parse_extra_guest_irqs(const char *s)
 {
     if ( isdigit(*s) )
         extra_domU_irqs = simple_strtoul(s, &s, 0);
     if ( *s == ',' && isdigit(*++s) )
         extra_hwdom_irqs = simple_strtoul(s, &s, 0);
+
+    return *s ? -EINVAL : 0;
 }
 custom_param("extra_guest_irqs", parse_extra_guest_irqs);
 
@@ -305,8 +307,6 @@ struct domain *domain_create(domid_t domid, unsigned int domcr_flags,
 
     if ( domcr_flags & DOMCRF_hvm )
         d->guest_type = guest_type_hvm;
-    else if ( domcr_flags & DOMCRF_pvh )
-        d->guest_type = guest_type_pvh;
     else
         d->guest_type = guest_type_pv;
 
@@ -366,9 +366,6 @@ struct domain *domain_create(domid_t domid, unsigned int domcr_flags,
         poolid = 0;
 
         err = -ENOMEM;
-        d->vm_event = xzalloc(struct vm_event_per_domain);
-        if ( !d->vm_event )
-            goto fail;
 
         d->pbuf = xzalloc_array(char, DOMAIN_PBUF_SIZE);
         if ( !d->pbuf )
@@ -406,7 +403,6 @@ struct domain *domain_create(domid_t domid, unsigned int domcr_flags,
     if ( hardware_domain == d )
         hardware_domain = old_hwdom;
     atomic_set(&d->refcnt, DOMAIN_DESTROYED);
-    xfree(d->vm_event);
     xfree(d->pbuf);
     if ( init_status & INIT_arch )
         arch_domain_destroy(d);
@@ -798,6 +794,14 @@ static void complete_domain_destroy(struct rcu_head *head)
     struct vcpu *v;
     int i;
 
+    /*
+     * Flush all state for the vCPU previously having run on the current CPU.
+     * This is in particular relevant for x86 HVM ones on VMX, so that this
+     * flushing of state won't happen from the TLB flush IPI handler behind
+     * the back of a vmx_vmcs_enter() / vmx_vmcs_exit() section.
+     */
+    sync_local_execstate();
+
     for ( i = d->max_vcpus - 1; i >= 0; i-- )
     {
         if ( (v = d->vcpu[i]) == NULL )
@@ -823,7 +827,14 @@ static void complete_domain_destroy(struct rcu_head *head)
     free_xenoprof_pages(d);
 #endif
 
-    xfree(d->vm_event);
+#ifdef CONFIG_HAS_MEM_PAGING
+    xfree(d->vm_event_paging);
+#endif
+    xfree(d->vm_event_monitor);
+#ifdef CONFIG_HAS_MEM_SHARING
+    xfree(d->vm_event_share);
+#endif
+
     xfree(d->pbuf);
 
     for ( i = d->max_vcpus - 1; i >= 0; i-- )
@@ -1150,7 +1161,7 @@ int map_vcpu_info(struct vcpu *v, unsigned long gfn, unsigned offset)
     if ( offset > (PAGE_SIZE - sizeof(vcpu_info_t)) )
         return -EINVAL;
 
-    if ( v->vcpu_info_mfn != mfn_x(INVALID_MFN) )
+    if ( !mfn_eq(v->vcpu_info_mfn, INVALID_MFN) )
         return -EINVAL;
 
     /* Run this command on yourself or on other offline VCPUS. */
@@ -1189,7 +1200,7 @@ int map_vcpu_info(struct vcpu *v, unsigned long gfn, unsigned offset)
     }
 
     v->vcpu_info = new_info;
-    v->vcpu_info_mfn = page_to_mfn(page);
+    v->vcpu_info_mfn = _mfn(page_to_mfn(page));
 
     /* Set new vcpu_info pointer /before/ setting pending flags. */
     smp_wmb();
@@ -1208,22 +1219,21 @@ int map_vcpu_info(struct vcpu *v, unsigned long gfn, unsigned offset)
 
 /*
  * Unmap the vcpu info page if the guest decided to place it somewhere
- * else. This is used from arch_domain_destroy and domain_soft_reset.
+ * else. This is used from domain_kill() and domain_soft_reset().
  */
 void unmap_vcpu_info(struct vcpu *v)
 {
-    unsigned long mfn;
+    mfn_t mfn = v->vcpu_info_mfn;
 
-    if ( v->vcpu_info_mfn == mfn_x(INVALID_MFN) )
+    if ( mfn_eq(mfn, INVALID_MFN) )
         return;
 
-    mfn = v->vcpu_info_mfn;
     unmap_domain_page_global((void *)
                              ((unsigned long)v->vcpu_info & PAGE_MASK));
 
-    vcpu_info_reset(v);
+    vcpu_info_reset(v); /* NB: Clobbers v->vcpu_info_mfn */
 
-    put_page_and_type(mfn_to_page(mfn));
+    put_page_and_type(mfn_to_page(mfn_x(mfn)));
 }
 
 int default_initialise_vcpu(struct vcpu *v, XEN_GUEST_HANDLE_PARAM(void) arg)

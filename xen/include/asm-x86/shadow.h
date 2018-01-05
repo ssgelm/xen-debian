@@ -63,17 +63,17 @@ int shadow_enable(struct domain *d, u32 mode);
 int shadow_track_dirty_vram(struct domain *d,
                             unsigned long first_pfn,
                             unsigned long nr,
-                            XEN_GUEST_HANDLE_64(uint8) dirty_bitmap);
+                            XEN_GUEST_HANDLE_PARAM(void) dirty_bitmap);
 
 /* Handler for shadow control ops: operations from user-space to enable
  * and disable ephemeral shadow modes (test mode and log-dirty mode) and
  * manipulate the log-dirty bitmap. */
 int shadow_domctl(struct domain *d, 
-                  xen_domctl_shadow_op_t *sc,
-                  XEN_GUEST_HANDLE_PARAM(void) u_domctl);
+                  struct xen_domctl_shadow_op *sc,
+                  XEN_GUEST_HANDLE_PARAM(xen_domctl_t) u_domctl);
 
 /* Call when destroying a domain */
-void shadow_teardown(struct domain *d, int *preempted);
+void shadow_teardown(struct domain *d, bool *preempted);
 
 /* Call once all of the references to the domain have gone away */
 void shadow_final_teardown(struct domain *d);
@@ -83,6 +83,13 @@ void sh_remove_shadows(struct domain *d, mfn_t gmfn, int fast, int all);
 /* Discard _all_ mappings from the domain's shadows. */
 void shadow_blow_tables_per_domain(struct domain *d);
 
+/* Set the pool of shadow pages to the required number of pages.
+ * Input will be rounded up to at least shadow_min_acceptable_pages(),
+ * plus space for the p2m table.
+ * Returns 0 for success, non-zero for failure. */
+int shadow_set_allocation(struct domain *d, unsigned int pages,
+                          bool *preempted);
+
 #else /* !CONFIG_SHADOW_PAGING */
 
 #define shadow_teardown(d, p) ASSERT(is_pv_domain(d))
@@ -91,14 +98,17 @@ void shadow_blow_tables_per_domain(struct domain *d);
     ({ ASSERT(is_pv_domain(d)); -EOPNOTSUPP; })
 #define shadow_track_dirty_vram(d, begin_pfn, nr, bitmap) \
     ({ ASSERT_UNREACHABLE(); -EOPNOTSUPP; })
+#define shadow_set_allocation(d, pages, preempted) \
+    ({ ASSERT_UNREACHABLE(); -EOPNOTSUPP; })
 
 static inline void sh_remove_shadows(struct domain *d, mfn_t gmfn,
-                                     bool_t fast, bool_t all) {}
+                                     int fast, int all) {}
 
 static inline void shadow_blow_tables_per_domain(struct domain *d) {}
 
-static inline int shadow_domctl(struct domain *d, xen_domctl_shadow_op_t *sc,
-                                XEN_GUEST_HANDLE_PARAM(void) u_domctl)
+static inline int shadow_domctl(struct domain *d,
+                                struct xen_domctl_shadow_op *sc,
+                                XEN_GUEST_HANDLE_PARAM(xen_domctl_t) u_domctl)
 {
     return -EINVAL;
 }

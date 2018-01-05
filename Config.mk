@@ -16,11 +16,6 @@ or       = $(if $(strip $(1)),$(1),$(if $(strip $(2)),$(2),$(if $(strip $(3)),$(
 
 -include $(XEN_ROOT)/.config
 
-# A debug build of tools?
-# Hypervisor debug build is controlled by Kconfig.
-debug ?= n
-debug_symbols ?= $(debug)
-
 XEN_COMPILE_ARCH    ?= $(shell uname -m | sed -e s/i.86/x86_32/ \
                          -e s/i86pc/x86_32/ -e s/amd64/x86_64/ \
                          -e s/armv7.*/arm32/ -e s/armv8.*/arm64/ \
@@ -61,6 +56,11 @@ HOSTCC ?= clang
 HOSTCXX ?= clang++
 endif
 
+DEPS_INCLUDE = $(addsuffix .d2, $(basename $(wildcard $(DEPS))))
+DEPS_RM = $(DEPS) $(DEPS_INCLUDE)
+
+%.d2: %.d
+	sed "s! $$PWD/! !" $^ >$@.tmp && mv -f $@.tmp $@
 
 include $(XEN_ROOT)/config/$(XEN_OS).mk
 include $(XEN_ROOT)/config/$(XEN_TARGET_ARCH).mk
@@ -113,21 +113,26 @@ endef
 
 cc-options-add = $(foreach o,$(3),$(call cc-option-add,$(1),$(2),$(o)))
 
-# cc-ver: Check compiler is at least specified version. Return boolean 'y'/'n'.
-# Usage: ifeq ($(call cc-ver,$(CC),0x030400),y)
+# cc-ver: Check compiler against the version requirement. Return boolean 'y'/'n'.
+# Usage: ifeq ($(call cc-ver,$(CC),ge,0x030400),y)
 cc-ver = $(shell if [ $$((`$(1) -dumpversion | awk -F. \
-           '{ printf "0x%02x%02x%02x", $$1, $$2, $$3}'`)) -ge $$(($(2))) ]; \
+           '{ printf "0x%02x%02x%02x", $$1, $$2, $$3}'`)) -$(2) $$(($(3))) ]; \
            then echo y; else echo n; fi ;)
 
 # cc-ver-check: Check compiler is at least specified version, else fail.
 # Usage: $(call cc-ver-check,CC,0x030400,"Require at least gcc-3.4")
 cc-ver-check = $(eval $(call cc-ver-check-closure,$(1),$(2),$(3)))
 define cc-ver-check-closure
-    ifeq ($$(call cc-ver,$$($(1)),$(2)),n)
+    ifeq ($$(call cc-ver,$$($(1)),ge,$(2)),n)
         override $(1) = echo "*** FATAL BUILD ERROR: "$(3) >&2; exit 1;
         cc-option := n
     endif
 endef
+
+# cc-ifversion: Check compiler version and take branch accordingly
+# Usage $(call cc-ifversion,lt,0x040700,string_if_y,string_if_n)
+cc-ifversion = $(shell [ $(call cc-ver,$(CC),$(1),$(2)) = "y" ] \
+				&& echo $(3) || echo $(4))
 
 # Require GCC v4.1+
 check-$(gcc) = $(call cc-ver-check,CC,0x040100,"Xen requires at least gcc-4.1")
@@ -206,20 +211,11 @@ define buildmakevars2header-closure
 	$(call move-if-changed,$(1).tmp,$(1))
 endef
 
-ifeq ($(debug_symbols),y)
-CFLAGS += -g
-endif
-
 CFLAGS += -fno-strict-aliasing
 
 CFLAGS += -std=gnu99
 
 CFLAGS += -Wall -Wstrict-prototypes
-
-# Clang complains about macros that expand to 'if ( ( foo == bar ) ) ...'
-# and is over-zealous with the printf format lint
-# and is a bit too fierce about unused return values
-CFLAGS-$(clang) += -Wno-parentheses -Wno-format -Wno-unused-value
 
 $(call cc-option-add,HOSTCFLAGS,HOSTCC,-Wdeclaration-after-statement)
 $(call cc-option-add,CFLAGS,CC,-Wdeclaration-after-statement)
@@ -276,20 +272,22 @@ QEMU_TRADITIONAL_URL ?= git://xenbits.xen.org/qemu-xen-traditional.git
 SEABIOS_UPSTREAM_URL ?= git://xenbits.xen.org/seabios.git
 MINIOS_UPSTREAM_URL ?= git://xenbits.xen.org/mini-os.git
 endif
-OVMF_UPSTREAM_REVISION ?= bc54e50e0fe03c570014f363b547426913e92449
-QEMU_UPSTREAM_REVISION ?= qemu-xen-4.8.2
-MINIOS_UPSTREAM_REVISION ?= xen-RELEASE-4.8.2
-# Wed Sep 28 11:50:04 2016 +0200
-# minios: fix build issue with xen_*mb defines
+OVMF_UPSTREAM_REVISION ?= 947f3737abf65fda63f3ffd97fddfa6986986868
+QEMU_UPSTREAM_REVISION ?= qemu-xen-4.10.0
+MINIOS_UPSTREAM_REVISION ?= xen-RELEASE-4.10.0
+# Mon Oct 16 16:36:41 2017 +0100
+# Update Xen header files again
 
-SEABIOS_UPSTREAM_REVISION ?= rel-1.10.0
+SEABIOS_UPSTREAM_REVISION ?= rel-1.10.2
 # Wed Jun 22 14:53:24 2016 +0800
 # fw/msr_feature_control: add support to set MSR_IA32_FEATURE_CONTROL
 
 ETHERBOOT_NICS ?= rtl8139 8086100e
 
 
-QEMU_TRADITIONAL_REVISION ?= xen-4.8.2
+QEMU_TRADITIONAL_REVISION ?= xen-4.10.0
+# Fri Sep 15 19:37:27 2017 +0100
+# qemu-xen-traditional: Link against xentoolcore
 
 # Specify which qemu-dm to use. This may be `ioemu' to use the old
 # Mercurial in-tree version, or a local directory, or a git URL.

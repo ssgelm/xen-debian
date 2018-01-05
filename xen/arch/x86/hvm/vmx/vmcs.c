@@ -15,7 +15,6 @@
  * this program; If not, see <http://www.gnu.org/licenses/>.
  */
 
-#include <xen/config.h>
 #include <xen/init.h>
 #include <xen/mm.h>
 #include <xen/lib.h>
@@ -75,9 +74,10 @@ static s8 __read_mostly opt_ept_ad = -1;
  *  pml                 Enable PML
  *  ad                  Use A/D bits
  */
-static void __init parse_ept_param(char *s)
+static int __init parse_ept_param(const char *s)
 {
-    char *ss;
+    const char *ss;
+    int rc = 0;
 
     do {
         bool_t val = !!strncmp(s, "no-", 3);
@@ -86,16 +86,20 @@ static void __init parse_ept_param(char *s)
             s += 3;
 
         ss = strchr(s, ',');
-        if ( ss )
-            *ss = '\0';
+        if ( !ss )
+            ss = strchr(s, '\0');
 
-        if ( !strcmp(s, "pml") )
+        if ( !strncmp(s, "pml", ss - s) )
             opt_pml_enabled = val;
-        else if ( !strcmp(s, "ad") )
+        else if ( !strncmp(s, "ad", ss - s) )
             opt_ept_ad = val;
+        else
+            rc = -EINVAL;
 
         s = ss + 1;
-    } while ( ss );
+    } while ( *ss );
+
+    return rc;
 }
 custom_param("ept", parse_ept_param);
 
@@ -227,6 +231,7 @@ static int vmx_init_vmcs_config(void)
         opt = (SECONDARY_EXEC_VIRTUALIZE_APIC_ACCESSES |
                SECONDARY_EXEC_WBINVD_EXITING |
                SECONDARY_EXEC_ENABLE_EPT |
+               SECONDARY_EXEC_DESCRIPTOR_TABLE_EXITING |
                SECONDARY_EXEC_ENABLE_RDTSCP |
                SECONDARY_EXEC_PAUSE_LOOP_EXITING |
                SECONDARY_EXEC_ENABLE_INVPCID |
@@ -600,17 +605,16 @@ void vmx_cpu_dead(unsigned int cpu)
     vmx_free_vmcs(per_cpu(vmxon_region, cpu));
     per_cpu(vmxon_region, cpu) = 0;
     nvmx_cpu_dead(cpu);
+    vmx_pi_desc_fixup(cpu);
 }
 
-int vmx_cpu_up(void)
+int _vmx_cpu_up(bool bsp)
 {
     u32 eax, edx;
     int rc, bios_locked, cpu = smp_processor_id();
     u64 cr0, vmx_cr0_fixed0, vmx_cr0_fixed1;
 
     BUG_ON(!(read_cr4() & X86_CR4_VMXE));
-
-    vmx_save_host_msrs();
 
     /* 
      * Ensure the current processor operating mode meets 
@@ -653,7 +657,7 @@ int vmx_cpu_up(void)
 
     INIT_LIST_HEAD(&this_cpu(active_vmcs_list));
 
-    if ( (rc = vmx_cpu_up_prepare(cpu)) != 0 )
+    if ( bsp && (rc = vmx_cpu_up_prepare(cpu)) != 0 )
         return rc;
 
     switch ( __vmxon(this_cpu(vmxon_region)) )
@@ -692,6 +696,11 @@ int vmx_cpu_up(void)
     vmx_pi_per_cpu_init(cpu);
 
     return 0;
+}
+
+int vmx_cpu_up()
+{
+    return _vmx_cpu_up(false);
 }
 
 void vmx_cpu_down(void)
@@ -779,7 +788,7 @@ void vmx_vmcs_exit(struct vcpu *v)
     {
         /* Don't confuse vmx_do_resume (for @v or @current!) */
         vmx_clear_vmcs(v);
-        if ( has_hvm_container_vcpu(current) )
+        if ( is_hvm_vcpu(current) )
             vmx_load_vmcs(current);
 
         spin_unlock(&v->arch.hvm_vmx.vmcs_lock);
@@ -811,9 +820,10 @@ static void vmx_set_host_env(struct vcpu *v)
               (unsigned long)&get_cpu_info()->guest_cpu_user_regs.error_code);
 }
 
-void vmx_disable_intercept_for_msr(struct vcpu *v, u32 msr, int type)
+void vmx_clear_msr_intercept(struct vcpu *v, unsigned int msr,
+                             enum vmx_msr_intercept_type type)
 {
-    unsigned long *msr_bitmap = v->arch.hvm_vmx.msr_bitmap;
+    struct vmx_msr_bitmap *msr_bitmap = v->arch.hvm_vmx.msr_bitmap;
     struct domain *d = v->domain;
 
     /* VMX MSR bitmap supported? */
@@ -823,94 +833,65 @@ void vmx_disable_intercept_for_msr(struct vcpu *v, u32 msr, int type)
     if ( unlikely(monitored_msr(d, msr)) )
         return;
 
-    /*
-     * See Intel PRM Vol. 3, 20.6.9 (MSR-Bitmap Address). Early manuals
-     * have the write-low and read-high bitmap offsets the wrong way round.
-     * We can control MSRs 0x00000000-0x00001fff and 0xc0000000-0xc0001fff.
-     */
     if ( msr <= 0x1fff )
     {
-        if ( type & MSR_TYPE_R )
-            clear_bit(msr, msr_bitmap + 0x000/BYTES_PER_LONG); /* read-low */
-        if ( type & MSR_TYPE_W )
-            clear_bit(msr, msr_bitmap + 0x800/BYTES_PER_LONG); /* write-low */
+        if ( type & VMX_MSR_R )
+            clear_bit(msr, msr_bitmap->read_low);
+        if ( type & VMX_MSR_W )
+            clear_bit(msr, msr_bitmap->write_low);
     }
     else if ( (msr >= 0xc0000000) && (msr <= 0xc0001fff) )
     {
         msr &= 0x1fff;
-        if ( type & MSR_TYPE_R )
-            clear_bit(msr, msr_bitmap + 0x400/BYTES_PER_LONG); /* read-high */
-        if ( type & MSR_TYPE_W )
-            clear_bit(msr, msr_bitmap + 0xc00/BYTES_PER_LONG); /* write-high */
+        if ( type & VMX_MSR_R )
+            clear_bit(msr, msr_bitmap->read_high);
+        if ( type & VMX_MSR_W )
+            clear_bit(msr, msr_bitmap->write_high);
     }
     else
-        HVM_DBG_LOG(DBG_LEVEL_MSR,
-                   "msr %x is out of the control range"
-                   "0x00000000-0x00001fff and 0xc0000000-0xc0001fff"
-                   "RDMSR or WRMSR will cause a VM exit", msr); 
-
+        ASSERT(!"MSR out of range for interception\n");
 }
 
-void vmx_enable_intercept_for_msr(struct vcpu *v, u32 msr, int type)
+void vmx_set_msr_intercept(struct vcpu *v, unsigned int msr,
+                           enum vmx_msr_intercept_type type)
 {
-    unsigned long *msr_bitmap = v->arch.hvm_vmx.msr_bitmap;
+    struct vmx_msr_bitmap *msr_bitmap = v->arch.hvm_vmx.msr_bitmap;
 
     /* VMX MSR bitmap supported? */
     if ( msr_bitmap == NULL )
         return;
 
-    /*
-     * See Intel PRM Vol. 3, 20.6.9 (MSR-Bitmap Address). Early manuals
-     * have the write-low and read-high bitmap offsets the wrong way round.
-     * We can control MSRs 0x00000000-0x00001fff and 0xc0000000-0xc0001fff.
-     */
     if ( msr <= 0x1fff )
     {
-        if ( type & MSR_TYPE_R )
-            set_bit(msr, msr_bitmap + 0x000/BYTES_PER_LONG); /* read-low */
-        if ( type & MSR_TYPE_W )
-            set_bit(msr, msr_bitmap + 0x800/BYTES_PER_LONG); /* write-low */
+        if ( type & VMX_MSR_R )
+            set_bit(msr, msr_bitmap->read_low);
+        if ( type & VMX_MSR_W )
+            set_bit(msr, msr_bitmap->write_low);
     }
     else if ( (msr >= 0xc0000000) && (msr <= 0xc0001fff) )
     {
         msr &= 0x1fff;
-        if ( type & MSR_TYPE_R )
-            set_bit(msr, msr_bitmap + 0x400/BYTES_PER_LONG); /* read-high */
-        if ( type & MSR_TYPE_W )
-            set_bit(msr, msr_bitmap + 0xc00/BYTES_PER_LONG); /* write-high */
+        if ( type & VMX_MSR_R )
+            set_bit(msr, msr_bitmap->read_high);
+        if ( type & VMX_MSR_W )
+            set_bit(msr, msr_bitmap->write_high);
     }
     else
-        HVM_DBG_LOG(DBG_LEVEL_MSR,
-                   "msr %x is out of the control range"
-                   "0x00000000-0x00001fff and 0xc0000000-0xc0001fff"
-                   "RDMSR or WRMSR will cause a VM exit", msr); 
+        ASSERT(!"MSR out of range for interception\n");
 }
 
-/*
- * access_type: read == 0, write == 1
- */
-int vmx_check_msr_bitmap(unsigned long *msr_bitmap, u32 msr, int access_type)
+bool vmx_msr_is_intercepted(struct vmx_msr_bitmap *msr_bitmap,
+                            unsigned int msr, bool is_write)
 {
-    int ret = 1;
-    if ( !msr_bitmap )
-        return 1;
-
     if ( msr <= 0x1fff )
-    {
-        if ( access_type == 0 )
-            ret = test_bit(msr, msr_bitmap + 0x000/BYTES_PER_LONG); /* read-low */
-        else if ( access_type == 1 )
-            ret = test_bit(msr, msr_bitmap + 0x800/BYTES_PER_LONG); /* write-low */
-    }
+        return test_bit(msr, is_write ? msr_bitmap->write_low
+                                      : msr_bitmap->read_low);
     else if ( (msr >= 0xc0000000) && (msr <= 0xc0001fff) )
-    {
-        msr &= 0x1fff;
-        if ( access_type == 0 )
-            ret = test_bit(msr, msr_bitmap + 0x400/BYTES_PER_LONG); /* read-high */
-        else if ( access_type == 1 )
-            ret = test_bit(msr, msr_bitmap + 0xc00/BYTES_PER_LONG); /* write-high */
-    }
-    return ret;
+        return test_bit(msr & 0x1fff, is_write ? msr_bitmap->write_high
+                                               : msr_bitmap->read_high);
+    else
+        /* MSRs outside the bitmap ranges are always intercepted. */
+        return true;
 }
 
 
@@ -965,11 +946,35 @@ u64 virtual_vmcs_vmread(const struct vcpu *v, u32 vmcs_encoding)
     return res;
 }
 
+enum vmx_insn_errno virtual_vmcs_vmread_safe(const struct vcpu *v,
+                                             u32 vmcs_encoding, u64 *val)
+{
+    enum vmx_insn_errno ret;
+
+    virtual_vmcs_enter(v);
+    ret = vmread_safe(vmcs_encoding, val);
+    virtual_vmcs_exit(v);
+
+    return ret;
+}
+
 void virtual_vmcs_vmwrite(const struct vcpu *v, u32 vmcs_encoding, u64 val)
 {
     virtual_vmcs_enter(v);
     __vmwrite(vmcs_encoding, val);
     virtual_vmcs_exit(v);
+}
+
+enum vmx_insn_errno virtual_vmcs_vmwrite_safe(const struct vcpu *v,
+                                              u32 vmcs_encoding, u64 val)
+{
+    enum vmx_insn_errno ret;
+
+    virtual_vmcs_enter(v);
+    ret = vmwrite_safe(vmcs_encoding, val);
+    virtual_vmcs_exit(v);
+
+    return ret;
 }
 
 /*
@@ -978,16 +983,13 @@ void virtual_vmcs_vmwrite(const struct vcpu *v, u32 vmcs_encoding, u64 val)
  */
 static void pi_desc_init(struct vcpu *v)
 {
-    uint32_t dest;
-
     v->arch.hvm_vmx.pi_desc.nv = posted_intr_vector;
 
-    dest = cpu_physical_id(v->processor);
-
-    if ( x2apic_enabled )
-        v->arch.hvm_vmx.pi_desc.ndst = dest;
-    else
-        v->arch.hvm_vmx.pi_desc.ndst = MASK_INSR(dest, PI_xAPIC_NDST_MASK);
+    /*
+     * Mark NDST as invalid, then we can use this invalid value as a
+     * marker to whether update NDST or not in vmx_pi_hooks_assign().
+     */
+    v->arch.hvm_vmx.pi_desc.ndst = APIC_INVALID_DEST;
 }
 
 static int construct_vmcs(struct vcpu *v)
@@ -1008,6 +1010,13 @@ static int construct_vmcs(struct vcpu *v)
         v->arch.hvm_vmx.exec_control |= CPU_BASED_RDTSC_EXITING;
 
     v->arch.hvm_vmx.secondary_exec_control = vmx_secondary_exec_control;
+
+    /*
+     * Disable descriptor table exiting: It's controlled by the VM event
+     * monitor requesting it.
+     */
+    v->arch.hvm_vmx.secondary_exec_control &=
+        ~SECONDARY_EXEC_DESCRIPTOR_TABLE_EXITING;
 
     /* Disable VPID for now: we decide when to enable it on VMENTER. */
     v->arch.hvm_vmx.secondary_exec_control &= ~SECONDARY_EXEC_ENABLE_VPID;
@@ -1055,20 +1064,6 @@ static int construct_vmcs(struct vcpu *v)
                   vmx_pin_based_exec_control & ~PIN_BASED_POSTED_INTERRUPT);
     }
 
-    if ( is_pvh_domain(d) )
-    {
-        /* Unrestricted guest (real mode for EPT) */
-        v->arch.hvm_vmx.secondary_exec_control &=
-            ~SECONDARY_EXEC_UNRESTRICTED_GUEST;
-
-        /* Start in 64-bit mode. PVH 32bitfixme. */
-        vmentry_ctl |= VM_ENTRY_IA32E_MODE;       /* GUEST_EFER.LME/LMA ignored */
-
-        ASSERT(v->arch.hvm_vmx.exec_control & CPU_BASED_ACTIVATE_SECONDARY_CONTROLS);
-        ASSERT(v->arch.hvm_vmx.exec_control & CPU_BASED_ACTIVATE_MSR_BITMAP);
-        ASSERT(!(v->arch.hvm_vmx.exec_control & CPU_BASED_RDTSC_EXITING));
-    }
-
     vmx_update_cpu_exec_control(v);
 
     __vmwrite(VM_EXIT_CONTROLS, vmexit_ctl);
@@ -1087,7 +1082,7 @@ static int construct_vmcs(struct vcpu *v)
     /* MSR access bitmap. */
     if ( cpu_has_vmx_msr_bitmap )
     {
-        unsigned long *msr_bitmap = alloc_xenheap_page();
+        struct vmx_msr_bitmap *msr_bitmap = alloc_xenheap_page();
 
         if ( msr_bitmap == NULL )
         {
@@ -1099,21 +1094,18 @@ static int construct_vmcs(struct vcpu *v)
         v->arch.hvm_vmx.msr_bitmap = msr_bitmap;
         __vmwrite(MSR_BITMAP, virt_to_maddr(msr_bitmap));
 
-        vmx_disable_intercept_for_msr(v, MSR_FS_BASE, MSR_TYPE_R | MSR_TYPE_W);
-        vmx_disable_intercept_for_msr(v, MSR_GS_BASE, MSR_TYPE_R | MSR_TYPE_W);
-        vmx_disable_intercept_for_msr(v, MSR_SHADOW_GS_BASE, MSR_TYPE_R | MSR_TYPE_W);
-        vmx_disable_intercept_for_msr(v, MSR_IA32_SYSENTER_CS, MSR_TYPE_R | MSR_TYPE_W);
-        vmx_disable_intercept_for_msr(v, MSR_IA32_SYSENTER_ESP, MSR_TYPE_R | MSR_TYPE_W);
-        vmx_disable_intercept_for_msr(v, MSR_IA32_SYSENTER_EIP, MSR_TYPE_R | MSR_TYPE_W);
+        vmx_clear_msr_intercept(v, MSR_FS_BASE, VMX_MSR_RW);
+        vmx_clear_msr_intercept(v, MSR_GS_BASE, VMX_MSR_RW);
+        vmx_clear_msr_intercept(v, MSR_SHADOW_GS_BASE, VMX_MSR_RW);
+        vmx_clear_msr_intercept(v, MSR_IA32_SYSENTER_CS, VMX_MSR_RW);
+        vmx_clear_msr_intercept(v, MSR_IA32_SYSENTER_ESP, VMX_MSR_RW);
+        vmx_clear_msr_intercept(v, MSR_IA32_SYSENTER_EIP, VMX_MSR_RW);
         if ( paging_mode_hap(d) && (!iommu_enabled || iommu_snoop) )
-            vmx_disable_intercept_for_msr(v, MSR_IA32_CR_PAT, MSR_TYPE_R | MSR_TYPE_W);
+            vmx_clear_msr_intercept(v, MSR_IA32_CR_PAT, VMX_MSR_RW);
         if ( (vmexit_ctl & VM_EXIT_CLEAR_BNDCFGS) &&
              (vmentry_ctl & VM_ENTRY_LOAD_BNDCFGS) )
-            vmx_disable_intercept_for_msr(v, MSR_IA32_BNDCFGS, MSR_TYPE_R | MSR_TYPE_W);
+            vmx_clear_msr_intercept(v, MSR_IA32_BNDCFGS, VMX_MSR_RW);
     }
-
-    /* All guest MSR state is dirty. */
-    v->arch.hvm_vmx.msr_state.flags = ((1u << VMX_MSR_COUNT) - 1);
 
     /* I/O access bitmap. */
     __vmwrite(IO_BITMAP_A, __pa(d->arch.hvm_domain.io_bitmap));
@@ -1207,11 +1199,7 @@ static int construct_vmcs(struct vcpu *v)
     __vmwrite(GUEST_DS_AR_BYTES, 0xc093);
     __vmwrite(GUEST_FS_AR_BYTES, 0xc093);
     __vmwrite(GUEST_GS_AR_BYTES, 0xc093);
-    if ( is_pvh_domain(d) )
-        /* CS.L == 1, exec, read/write, accessed. */
-        __vmwrite(GUEST_CS_AR_BYTES, 0xa09b);
-    else
-        __vmwrite(GUEST_CS_AR_BYTES, 0xc09b); /* exec/read, accessed */
+    __vmwrite(GUEST_CS_AR_BYTES, 0xc09b); /* exec/read, accessed */
 
     /* Guest IDT. */
     __vmwrite(GUEST_IDTR_BASE, 0);
@@ -1241,23 +1229,10 @@ static int construct_vmcs(struct vcpu *v)
               | (1U << TRAP_no_device);
     vmx_update_exception_bitmap(v);
 
-    /*
-     * In HVM domains, this happens on the realmode->paging
-     * transition.  Since PVH never goes through this transition, we
-     * need to do it at start-of-day.
-     */
-    if ( is_pvh_domain(d) )
-        vmx_update_debug_state(v);
-
     v->arch.hvm_vcpu.guest_cr[0] = X86_CR0_PE | X86_CR0_ET;
-
-    /* PVH domains always start in paging mode */
-    if ( is_pvh_domain(d) )
-        v->arch.hvm_vcpu.guest_cr[0] |= X86_CR0_PG;
-
     hvm_update_guest_cr(v, 0);
 
-    v->arch.hvm_vcpu.guest_cr[4] = is_pvh_domain(d) ? X86_CR4_PAE : 0;
+    v->arch.hvm_vcpu.guest_cr[4] = 0;
     hvm_update_guest_cr(v, 4);
 
     if ( cpu_has_vmx_tpr_shadow )
@@ -1272,8 +1247,8 @@ static int construct_vmcs(struct vcpu *v)
         struct p2m_domain *p2m = p2m_get_hostp2m(d);
         struct ept_data *ept = &p2m->ept;
 
-        ept->asr  = pagetable_get_pfn(p2m_get_pagetable(p2m));
-        __vmwrite(EPT_POINTER, ept_get_eptp(ept));
+        ept->mfn = pagetable_get_pfn(p2m_get_pagetable(p2m));
+        __vmwrite(EPT_POINTER, ept->eptp);
     }
 
     if ( paging_mode_hap(d) )
@@ -1296,31 +1271,60 @@ static int construct_vmcs(struct vcpu *v)
 
     vmx_vmcs_exit(v);
 
-    /* PVH: paging mode is updated by arch_set_info_guest(). */
-    if ( is_hvm_domain(d) )
-    {
-        /* will update HOST & GUEST_CR3 as reqd */
-        paging_update_paging_modes(v);
+    /* will update HOST & GUEST_CR3 as reqd */
+    paging_update_paging_modes(v);
 
-        vmx_vlapic_msr_changed(v);
-    }
+    vmx_vlapic_msr_changed(v);
 
     return 0;
 }
 
-int vmx_read_guest_msr(u32 msr, u64 *val)
+static int vmx_msr_entry_key_cmp(const void *key, const void *elt)
+{
+    const u32 *msr = key;
+    const struct vmx_msr_entry *entry = elt;
+
+    if ( *msr > entry->index )
+        return 1;
+    if ( *msr < entry->index )
+        return -1;
+
+    return 0;
+}
+
+struct vmx_msr_entry *vmx_find_msr(u32 msr, int type)
 {
     struct vcpu *curr = current;
-    unsigned int i, msr_count = curr->arch.hvm_vmx.msr_count;
-    const struct vmx_msr_entry *msr_area = curr->arch.hvm_vmx.msr_area;
+    unsigned int msr_count;
+    struct vmx_msr_entry *msr_area;
 
-    for ( i = 0; i < msr_count; i++ )
+    if ( type == VMX_GUEST_MSR )
     {
-        if ( msr_area[i].index == msr )
-        {
-            *val = msr_area[i].data;
-            return 0;
-        }
+        msr_count = curr->arch.hvm_vmx.msr_count;
+        msr_area = curr->arch.hvm_vmx.msr_area;
+    }
+    else
+    {
+        ASSERT(type == VMX_HOST_MSR);
+        msr_count = curr->arch.hvm_vmx.host_msr_count;
+        msr_area = curr->arch.hvm_vmx.host_msr_area;
+    }
+
+    if ( msr_area == NULL )
+        return NULL;
+
+    return bsearch(&msr, msr_area, msr_count, sizeof(struct vmx_msr_entry),
+                   vmx_msr_entry_key_cmp);
+}
+
+int vmx_read_guest_msr(u32 msr, u64 *val)
+{
+    struct vmx_msr_entry *ent;
+
+    if ( (ent = vmx_find_msr(msr, VMX_GUEST_MSR)) != NULL )
+    {
+        *val = ent->data;
+        return 0;
     }
 
     return -ESRCH;
@@ -1328,17 +1332,12 @@ int vmx_read_guest_msr(u32 msr, u64 *val)
 
 int vmx_write_guest_msr(u32 msr, u64 val)
 {
-    struct vcpu *curr = current;
-    unsigned int i, msr_count = curr->arch.hvm_vmx.msr_count;
-    struct vmx_msr_entry *msr_area = curr->arch.hvm_vmx.msr_area;
+    struct vmx_msr_entry *ent;
 
-    for ( i = 0; i < msr_count; i++ )
+    if ( (ent = vmx_find_msr(msr, VMX_GUEST_MSR)) != NULL )
     {
-        if ( msr_area[i].index == msr )
-        {
-            msr_area[i].data = val;
-            return 0;
-        }
+        ent->data = val;
+        return 0;
     }
 
     return -ESRCH;
@@ -1376,14 +1375,17 @@ int vmx_add_msr(u32 msr, int type)
             __vmwrite(VM_EXIT_MSR_LOAD_ADDR, virt_to_maddr(*msr_area));
     }
 
-    for ( idx = 0; idx < *msr_count; idx++ )
+    for ( idx = 0; idx < *msr_count && (*msr_area)[idx].index <= msr; idx++ )
         if ( (*msr_area)[idx].index == msr )
             return 0;
 
     if ( *msr_count == (PAGE_SIZE / sizeof(struct vmx_msr_entry)) )
         return -ENOSPC;
 
-    msr_area_elem = *msr_area + *msr_count;
+    memmove(*msr_area + idx + 1, *msr_area + idx,
+            sizeof(*msr_area_elem) * (*msr_count - idx));
+
+    msr_area_elem = *msr_area + idx;
     msr_area_elem->index = msr;
     msr_area_elem->mbz = 0;
 
@@ -1509,7 +1511,9 @@ void vmx_vcpu_flush_pml_buffer(struct vcpu *v)
          * is extremely difficult to debug.
          */
         p2m_change_type_one(v->domain, gfn, p2m_ram_logdirty, p2m_ram_rw);
-        paging_mark_gfn_dirty(v->domain, gfn);
+
+        /* HVM guest: pfn == gfn */
+        paging_mark_pfn_dirty(v->domain, _pfn(gfn));
     }
 
     unmap_domain_page(pml_buf);
@@ -1616,7 +1620,7 @@ void vmx_domain_update_eptp(struct domain *d)
     ASSERT(atomic_read(&d->pause_count));
 
     for_each_vcpu ( d, v )
-        vmx_vcpu_update_eptp(v, ept_get_eptp(&p2m->ept));
+        vmx_vcpu_update_eptp(v, p2m->ept.eptp);
 
     ept_sync_domain(p2m);
 }
@@ -1731,7 +1735,7 @@ static inline unsigned long vmr(unsigned long field)
 {
     unsigned long val;
 
-    return __vmread_safe(field, &val) ? val : 0;
+    return vmread_safe(field, &val) ? 0 : val;
 }
 
 #define vmr16(fld) ({             \
@@ -1798,10 +1802,10 @@ void vmcs_dump_vcpu(struct vcpu *v)
                vmr(GUEST_PDPTE(2)), vmr(GUEST_PDPTE(3)));
     }
     printk("RSP = 0x%016lx (0x%016lx)  RIP = 0x%016lx (0x%016lx)\n",
-           vmr(GUEST_RSP), regs->esp,
-           vmr(GUEST_RIP), regs->eip);
+           vmr(GUEST_RSP), regs->rsp,
+           vmr(GUEST_RIP), regs->rip);
     printk("RFLAGS=0x%08lx (0x%08lx)  DR7 = 0x%016lx\n",
-           vmr(GUEST_RFLAGS), regs->eflags,
+           vmr(GUEST_RFLAGS), regs->rflags,
            vmr(GUEST_DR7));
     printk("Sysenter RSP=%016lx CS:RIP=%04x:%016lx\n",
            vmr(GUEST_SYSENTER_ESP),
@@ -1918,7 +1922,7 @@ static void vmcs_dump(unsigned char ch)
 
     for_each_domain ( d )
     {
-        if ( !has_hvm_container_domain(d) )
+        if ( !is_hvm_domain(d) )
             continue;
         printk("\n>>> Domain %d <<<\n", d->domain_id);
         for_each_vcpu ( d, v )
@@ -1938,6 +1942,21 @@ void __init setup_vmcs_dump(void)
     register_keyhandler('v', vmcs_dump, "dump VT-x VMCSs", 1);
 }
 
+static void __init __maybe_unused build_assertions(void)
+{
+    struct vmx_msr_bitmap bitmap;
+
+    /* Check vmx_msr_bitmap layoug against hardware expectations. */
+    BUILD_BUG_ON(sizeof(bitmap)            != PAGE_SIZE);
+    BUILD_BUG_ON(sizeof(bitmap.read_low)   != 1024);
+    BUILD_BUG_ON(sizeof(bitmap.read_high)  != 1024);
+    BUILD_BUG_ON(sizeof(bitmap.write_low)  != 1024);
+    BUILD_BUG_ON(sizeof(bitmap.write_high) != 1024);
+    BUILD_BUG_ON(offsetof(struct vmx_msr_bitmap, read_low)   != 0);
+    BUILD_BUG_ON(offsetof(struct vmx_msr_bitmap, read_high)  != 1024);
+    BUILD_BUG_ON(offsetof(struct vmx_msr_bitmap, write_low)  != 2048);
+    BUILD_BUG_ON(offsetof(struct vmx_msr_bitmap, write_high) != 3072);
+}
 
 /*
  * Local variables:

@@ -7,9 +7,9 @@ Patch-Name: tools-include-install.diff
 
 ---
 
---- xen-4.8.2+xsa243.orig/tools/include/Makefile
-+++ xen-4.8.2+xsa243/tools/include/Makefile
-@@ -14,7 +14,6 @@ xen-foreign:
+--- a/tools/include/Makefile
++++ b/tools/include/Makefile
+@@ -14,7 +14,6 @@
  xen/.dir:
  	@rm -rf xen
  	mkdir -p xen/libelf
@@ -17,7 +17,7 @@ Patch-Name: tools-include-install.diff
  	ln -sf $(wildcard $(XEN_ROOT)/xen/include/public/*.h) xen
  	ln -sf $(addprefix $(XEN_ROOT)/xen/include/public/,arch-x86 arch-arm hvm io xsm) xen
  	ln -sf ../xen-sys/$(XEN_OS) xen/sys
-@@ -43,7 +42,6 @@ install: all
+@@ -43,7 +42,6 @@
  	$(INSTALL_DIR) $(DESTDIR)$(includedir)/xen/io
  	$(INSTALL_DIR) $(DESTDIR)$(includedir)/xen/sys
  	$(INSTALL_DIR) $(DESTDIR)$(includedir)/xen/xsm
