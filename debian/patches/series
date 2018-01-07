@@ -32,3 +32,4 @@ toolstestsx86_emulator-pass--no-pie--fno.patch
 fix-xentoolcore.patch
 tools-fake-xs-restrict.patch
 fix-devicemodel.patch
+fix-pkgconfig-versions.patch
