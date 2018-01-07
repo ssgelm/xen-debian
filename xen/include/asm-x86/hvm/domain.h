@@ -33,9 +33,10 @@
 #include <public/hvm/params.h>
 #include <public/hvm/save.h>
 #include <public/hvm/hvm_op.h>
+#include <public/hvm/dm_op.h>
 
 struct hvm_ioreq_page {
-    unsigned long gmfn;
+    unsigned long gfn;
     struct page_info *page;
     void *va;
 };
@@ -44,10 +45,10 @@ struct hvm_ioreq_vcpu {
     struct list_head list_entry;
     struct vcpu      *vcpu;
     evtchn_port_t    ioreq_evtchn;
-    bool_t           pending;
+    bool             pending;
 };
 
-#define NR_IO_RANGE_TYPES (HVMOP_IO_RANGE_PCI + 1)
+#define NR_IO_RANGE_TYPES (XEN_DMOP_IO_RANGE_PCI + 1)
 #define MAX_NR_IO_RANGES  256
 
 struct hvm_ioreq_server {
@@ -68,8 +69,35 @@ struct hvm_ioreq_server {
     spinlock_t             bufioreq_lock;
     evtchn_port_t          bufioreq_evtchn;
     struct rangeset        *range[NR_IO_RANGE_TYPES];
-    bool_t                 enabled;
-    bool_t                 bufioreq_atomic;
+    bool                   enabled;
+    bool                   bufioreq_atomic;
+};
+
+/*
+ * This structure defines function hooks to support hardware-assisted
+ * virtual interrupt delivery to guest. (e.g. VMX PI and SVM AVIC).
+ *
+ * These hooks are defined by the underlying arch-specific code
+ * as needed. For example:
+ *   - When the domain is enabled with virtual IPI delivery
+ *   - When the domain is enabled with virtual I/O int delivery
+ *     and actually has a physical device assigned .
+ */
+struct hvm_pi_ops {
+    /* Hook into ctx_switch_from. */
+    void (*switch_from)(struct vcpu *v);
+
+    /* Hook into ctx_switch_to. */
+    void (*switch_to)(struct vcpu *v);
+
+    /*
+     * Hook into arch_vcpu_block(), which is called
+     * from vcpu_block() and vcpu_do_poll().
+     */
+    void (*vcpu_block)(struct vcpu *);
+
+    /* Hook into the vmentry path. */
+    void (*do_resume)(struct vcpu *v);
 };
 
 struct hvm_domain {
@@ -77,7 +105,7 @@ struct hvm_domain {
     struct {
         unsigned long base;
         unsigned long mask;
-    } ioreq_gmfn;
+    } ioreq_gfn;
 
     /* Lock protects all other values in the sub-struct and the default */
     struct {
@@ -97,10 +125,21 @@ struct hvm_domain {
 
     /* Lock protects access to irq, vpic and vioapic. */
     spinlock_t             irq_lock;
-    struct hvm_irq         irq;
+    struct hvm_irq        *irq;
     struct hvm_hw_vpic     vpic[2]; /* 0=master; 1=slave */
-    struct hvm_vioapic    *vioapic;
+    struct hvm_vioapic    **vioapic;
+    unsigned int           nr_vioapics;
     struct hvm_hw_stdvga   stdvga;
+
+    /*
+     * hvm_hw_pmtimer is a publicly-visible name. We will defer renaming
+     * it to the more appropriate hvm_hw_acpi until the expected
+     * comprehensive rewrte of migration code, thus avoiding code churn
+     * in public header files.
+     * Internally, however, we will be using hvm_hw_acpi.
+     */
+#define hvm_hw_acpi hvm_hw_pmtimer
+    struct hvm_hw_acpi     acpi;
 
     /* VCPU which is current target for 8259 interrupts. */
     struct vcpu           *i8259_target;
@@ -142,11 +181,16 @@ struct hvm_domain {
 
     unsigned long *io_bitmap;
 
+    /* List of guest to machine IO ports mapping. */
+    struct list_head g2m_ioport_list;
+
     /* List of permanently write-mapped pages. */
     struct {
         spinlock_t lock;
         struct list_head list;
     } write_map;
+
+    struct hvm_pi_ops pi_ops;
 
     union {
         struct vmx_domain vmx;

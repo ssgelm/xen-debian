@@ -24,7 +24,7 @@
 
 typedef u64 cycles_t;
 
-extern bool_t disable_tsc_sync;
+extern bool disable_tsc_sync;
 
 static inline cycles_t get_cycles(void)
 {
@@ -71,9 +71,6 @@ void force_update_vcpu_system_time(struct vcpu *v);
 
 bool clocksource_is_tsc(void);
 int host_tsc_is_safe(void);
-void cpuid_time_leaf(uint32_t sub_idx, uint32_t *eax, uint32_t *ebx,
-                     uint32_t *ecx, uint32_t *edx);
-
 u64 stime2tsc(s_time_t stime);
 
 struct time_scale;

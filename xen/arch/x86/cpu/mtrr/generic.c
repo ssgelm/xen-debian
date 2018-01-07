@@ -3,6 +3,7 @@
 #include <xen/lib.h>
 #include <xen/init.h>
 #include <xen/mm.h>
+#include <xen/stdbool.h>
 #include <asm/flushtlb.h>
 #include <asm/io.h>
 #include <asm/mtrr.h>
@@ -237,7 +238,7 @@ static void mtrr_wrmsr(unsigned int msr, uint64_t msr_content)
  * \param changed pointer which indicates whether the MTRR needed to be changed
  * \param msrwords pointer to the MSR values which the MSR should have
  */
-static void set_fixed_range(int msr, int * changed, unsigned int * msrwords)
+static void set_fixed_range(int msr, bool *changed, unsigned int *msrwords)
 {
 	uint64_t msr_content, val;
 
@@ -246,7 +247,7 @@ static void set_fixed_range(int msr, int * changed, unsigned int * msrwords)
 
 	if (msr_content != val) {
 		mtrr_wrmsr(msr, val);
-		*changed = TRUE;
+		*changed = true;
 	}
 }
 
@@ -302,10 +303,10 @@ static void generic_get_mtrr(unsigned int reg, unsigned long *base,
  * Checks and updates the fixed-range MTRRs if they differ from the saved set
  * \param frs pointer to fixed-range MTRR values, saved by get_fixed_ranges()
  */
-static int set_fixed_ranges(mtrr_type * frs)
+static bool set_fixed_ranges(mtrr_type *frs)
 {
 	unsigned long long *saved = (unsigned long long *) frs;
-	int changed = FALSE;
+	bool changed = false;
 	int block=-1, range;
 
 	while (fixed_range_blocks[++block].ranges)
@@ -316,13 +317,13 @@ static int set_fixed_ranges(mtrr_type * frs)
 	return changed;
 }
 
-/*  Set the MSR pair relating to a var range. Returns TRUE if
+/*  Set the MSR pair relating to a var range. Returns true if
     changes are made  */
-static int set_mtrr_var_ranges(unsigned int index, struct mtrr_var_range *vr)
+static bool set_mtrr_var_ranges(unsigned int index, struct mtrr_var_range *vr)
 {
 	uint32_t lo, hi, base_lo, base_hi, mask_lo, mask_hi;
 	uint64_t msr_content;
-	int changed = FALSE;
+	bool changed = false;
 
 	rdmsrl(MSR_IA32_MTRR_PHYSBASE(index), msr_content);
 	lo = (uint32_t)msr_content;
@@ -337,7 +338,7 @@ static int set_mtrr_var_ranges(unsigned int index, struct mtrr_var_range *vr)
 
 	if ((base_lo != lo) || (base_hi != hi)) {
 		mtrr_wrmsr(MSR_IA32_MTRR_PHYSBASE(index), vr->base);
-		changed = TRUE;
+		changed = true;
 	}
 
 	rdmsrl(MSR_IA32_MTRR_PHYSMASK(index), msr_content);
@@ -353,7 +354,7 @@ static int set_mtrr_var_ranges(unsigned int index, struct mtrr_var_range *vr)
 
 	if ((mask_lo != lo) || (mask_hi != hi)) {
 		mtrr_wrmsr(MSR_IA32_MTRR_PHYSMASK(index), vr->mask);
-		changed = TRUE;
+		changed = true;
 	}
 	return changed;
 }
@@ -390,7 +391,6 @@ static unsigned long set_mtrr_state(void)
 }
 
 
-static unsigned long cr4 = 0;
 static DEFINE_SPINLOCK(set_atomicity_lock);
 
 /*
@@ -402,8 +402,6 @@ static DEFINE_SPINLOCK(set_atomicity_lock);
 
 static void prepare_set(void)
 {
-	unsigned long cr0;
-
 	/*  Note that this is not ideal, since the cache is only flushed/disabled
 	   for this CPU while the MTRRs are changed, but changing this requires
 	   more invasive changes to the way the kernel boots  */
@@ -411,18 +409,12 @@ static void prepare_set(void)
 	spin_lock(&set_atomicity_lock);
 
 	/*  Enter the no-fill (CD=1, NW=0) cache mode and flush caches. */
-	cr0 = read_cr0() | 0x40000000;	/* set CD flag */
-	write_cr0(cr0);
+	write_cr0(read_cr0() | X86_CR0_CD);
 	wbinvd();
 
-	/*  Save value of CR4 and clear Page Global Enable (bit 7)  */
-	if ( cpu_has_pge ) {
-		cr4 = read_cr4();
-		write_cr4(cr4 & ~X86_CR4_PGE);
-	}
-
-	/* Flush all TLBs via a mov %cr3, %reg; mov %reg, %cr3 */
-	flush_tlb_local();
+	/*  TLB flushing here relies on Xen always using CR4.PGE. */
+	BUILD_BUG_ON(!(XEN_MINIMAL_CR4 & X86_CR4_PGE));
+	write_cr4(read_cr4() & ~X86_CR4_PGE);
 
 	/*  Save MTRR state */
 	rdmsrl(MSR_MTRRdefType, deftype);
@@ -433,18 +425,15 @@ static void prepare_set(void)
 
 static void post_set(void)
 {
-	/*  Flush TLBs (no need to flush caches - they are disabled)  */
-	flush_tlb_local();
-
 	/* Intel (P6) standard MTRRs */
 	mtrr_wrmsr(MSR_MTRRdefType, deftype);
-		
-	/*  Enable caches  */
-	write_cr0(read_cr0() & 0xbfffffff);
 
-	/*  Restore value of CR4  */
-	if ( cpu_has_pge )
-		write_cr4(cr4);
+	/*  Enable caches  */
+	write_cr0(read_cr0() & ~X86_CR0_CD);
+
+	/*  Reenable CR4.PGE (also flushes the TLB) */
+	write_cr4(read_cr4() | X86_CR4_PGE);
+
 	spin_unlock(&set_atomicity_lock);
 }
 
@@ -478,7 +467,7 @@ static void generic_set_mtrr(unsigned int reg, unsigned long base,
     <base> The base address of the region.
     <size> The size of the region. If this is 0 the region is disabled.
     <type> The type of the region.
-    <do_safe> If TRUE, do the change safely. If FALSE, safety measures should
+    <do_safe> If true, do the change safely. If false, safety measures should
     be done externally.
     [RETURNS] Nothing.
 */
@@ -556,15 +545,10 @@ static int generic_have_wrcomb(void)
 	return (config & (1ULL << 10));
 }
 
-int positive_have_wrcomb(void)
-{
-	return 1;
-}
-
 /* generic structure...
  */
 const struct mtrr_ops generic_mtrr_ops = {
-	.use_intel_if      = 1,
+	.use_intel_if      = true,
 	.set_all	   = generic_set_all,
 	.get               = generic_get_mtrr,
 	.get_free_region   = generic_get_free_region,

@@ -1,7 +1,6 @@
 /* Excerpts written by Martin Mares <mj@atrey.karlin.mff.cuni.cz> */
 /* Modified for i386/x86-64 Xen by Keir Fraser */
 
-#include <xen/config.h>
 #include <xen/cache.h>
 #include <asm/page.h>
 #include <asm/percpu.h>
@@ -55,7 +54,7 @@ SECTIONS
   __2M_text_start = .;         /* Start of 2M superpages, mapped RX. */
 #endif
 
-  . = __XEN_VIRT_START + MB(1);
+  . = __XEN_VIRT_START + XEN_IMG_OFFSET;
   _start = .;
   .text : {
         _stext = .;            /* Text and read-only data */
@@ -91,6 +90,8 @@ SECTIONS
 
        *(.rodata)
        *(.rodata.*)
+       *(.data.rel.ro)
+       *(.data.rel.ro.*)
 
 #if defined(BUILD_ID) && defined(EFI) && !defined(BUILD_ID_EFI)
 /*
@@ -119,6 +120,10 @@ SECTIONS
        *(.lockprofile.data)
        __lock_profile_end = .;
 #endif
+       . = ALIGN(POINTER_ALIGN);
+       __param_start = .;
+       *(.data.param)
+       __param_end = .;
   } :text
 
 #if defined(BUILD_ID)
@@ -154,7 +159,7 @@ SECTIONS
   __2M_init_start = .;         /* Start of 2M superpages, mapped RWX (boot only). */
   . = ALIGN(PAGE_SIZE);             /* Init code and data */
   __init_begin = .;
-  .init.text : {
+  .init : {
        _sinittext = .;
        *(.init.text)
        /*
@@ -164,8 +169,9 @@ SECTIONS
         */
        *(.altinstr_replacement)
        _einittext = .;
-  } :text
-  .init.data : {
+
+       . = ALIGN(SMP_CACHE_BYTES);
+
        *(.init.rodata)
        *(.init.rodata.rel)
        *(.init.rodata.str*)
@@ -225,8 +231,6 @@ SECTIONS
        __start_schedulers_array = .;
        *(.data.schedulers)
        __end_schedulers_array = .;
-       *(.data.rel.ro)
-       *(.data.rel.ro.*)
   } :text
 
   .data : {                    /* Data */
@@ -270,9 +274,9 @@ SECTIONS
   .pad : {
     . = ALIGN(MB(16));
   } :text
-#else
-  efi = .;
 #endif
+
+  efi = DEFINED(efi) ? efi : .;
 
   /* Sections to be discarded */
   /DISCARD/ : {
@@ -331,5 +335,10 @@ ASSERT(IS_ALIGNED(__init_end,   PAGE_SIZE), "__init_end misaligned")
 
 ASSERT(IS_ALIGNED(trampoline_start, 4), "trampoline_start misaligned")
 ASSERT(IS_ALIGNED(trampoline_end,   4), "trampoline_end misaligned")
-ASSERT(IS_ALIGNED(__bss_start,      4), "__bss_start misaligned")
-ASSERT(IS_ALIGNED(__bss_end,        4), "__bss_end misaligned")
+ASSERT(IS_ALIGNED(__bss_start,      8), "__bss_start misaligned")
+ASSERT(IS_ALIGNED(__bss_end,        8), "__bss_end misaligned")
+
+ASSERT((trampoline_end - trampoline_start) < TRAMPOLINE_SPACE - MBI_SPACE_MIN,
+    "not enough room for trampoline and mbi data")
+ASSERT((wakeup_stack - wakeup_stack_start) >= WAKEUP_STACK_MIN,
+    "wakeup stack too small")

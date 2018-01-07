@@ -20,7 +20,6 @@
  *	Paul Diefenbaugh	:	Added full ACPI support
  */
 
-#include <xen/config.h>
 #include <xen/lib.h>
 #include <xen/init.h>
 #include <xen/irq.h>
@@ -44,9 +43,9 @@ static struct { int pin, apic; } ioapic_i8259 = { -1, -1 };
 
 static DEFINE_SPINLOCK(ioapic_lock);
 
-bool_t __read_mostly skip_ioapic_setup;
-bool_t __initdata ioapic_ack_new = 1;
-bool_t __initdata ioapic_ack_forced = 0;
+bool __read_mostly skip_ioapic_setup;
+bool __initdata ioapic_ack_new = true;
+bool __initdata ioapic_ack_forced;
 
 /*
  * # of IRQ routing registers
@@ -230,7 +229,7 @@ union entry_union {
 };
 
 struct IO_APIC_route_entry __ioapic_read_entry(
-    unsigned int apic, unsigned int pin, bool_t raw)
+    unsigned int apic, unsigned int pin, bool raw)
 {
     unsigned int (*read)(unsigned int, unsigned int)
         = raw ? __io_apic_read : io_apic_read;
@@ -241,7 +240,7 @@ struct IO_APIC_route_entry __ioapic_read_entry(
 }
 
 static struct IO_APIC_route_entry ioapic_read_entry(
-    unsigned int apic, unsigned int pin, bool_t raw)
+    unsigned int apic, unsigned int pin, bool raw)
 {
     struct IO_APIC_route_entry entry;
     unsigned long flags;
@@ -253,7 +252,7 @@ static struct IO_APIC_route_entry ioapic_read_entry(
 }
 
 void __ioapic_write_entry(
-    unsigned int apic, unsigned int pin, bool_t raw,
+    unsigned int apic, unsigned int pin, bool raw,
     struct IO_APIC_route_entry e)
 {
     void (*write)(unsigned int, unsigned int, unsigned int)
@@ -265,7 +264,7 @@ void __ioapic_write_entry(
 }
 
 static void ioapic_write_entry(
-    unsigned int apic, unsigned int pin, bool_t raw,
+    unsigned int apic, unsigned int pin, bool raw,
     struct IO_APIC_route_entry e)
 {
     unsigned long flags;
@@ -295,7 +294,7 @@ static void __io_apic_eoi(unsigned int apic, unsigned int vector, unsigned int p
         /* Else fake an EOI by switching to edge triggered mode
          * and back */
         struct IO_APIC_route_entry entry;
-        bool_t need_to_unmask = 0;
+        bool need_to_unmask = false;
 
         entry = __ioapic_read_entry(apic, pin, TRUE);
 
@@ -305,7 +304,7 @@ static void __io_apic_eoi(unsigned int apic, unsigned int vector, unsigned int p
              * a note to unmask it later */
             entry.mask = 1;
             __ioapic_write_entry(apic, pin, TRUE, entry);
-            need_to_unmask = 1;
+            need_to_unmask = true;
         }
 
         /* Flip the trigger mode to edge and back */
@@ -1063,7 +1062,7 @@ static void __init setup_ExtINT_IRQ0_pin(unsigned int apic, unsigned int pin, in
     disable_8259A_irq(irq_to_desc(0));
 
     /* mask LVT0 */
-    apic_write_around(APIC_LVT0, APIC_LVT_MASKED | APIC_DM_EXTINT);
+    apic_write(APIC_LVT0, APIC_LVT_MASKED | APIC_DM_EXTINT);
 
     /*
      * We use logical delivery to get the timer IRQ
@@ -1095,7 +1094,7 @@ static inline void UNEXPECTED_IO_APIC(void)
 {
 }
 
-static void /*__init*/ __print_IO_APIC(bool_t boot)
+static void /*__init*/ __print_IO_APIC(bool boot)
 {
     int apic, i;
     union IO_APIC_reg_00 reg_00;
@@ -1485,8 +1484,7 @@ static int __init timer_irq_works(void)
 {
     unsigned long t1, flags;
 
-    t1 = pit0_ticks;
-    mb();
+    t1 = ACCESS_ONCE(pit0_ticks);
 
     local_save_flags(flags);
     local_irq_enable();
@@ -1501,8 +1499,7 @@ static int __init timer_irq_works(void)
      * might have cached one ExtINT interrupt.  Finally, at
      * least one tick may be lost due to delays.
      */
-    mb();
-    if (pit0_ticks - t1 > 4)
+    if ( (ACCESS_ONCE(pit0_ticks) - t1) > 4 )
         return 1;
 
     return 0;
@@ -1584,24 +1581,26 @@ static unsigned int startup_level_ioapic_irq(struct irq_desc *desc)
     return 0; /* don't check for pending */
 }
 
-static void __init setup_ioapic_ack(char *s)
+static int __init setup_ioapic_ack(const char *s)
 {
     if ( !strcmp(s, "old") )
     {
-        ioapic_ack_new = 0;
-        ioapic_ack_forced = 1;
+        ioapic_ack_new = false;
+        ioapic_ack_forced = true;
     }
     else if ( !strcmp(s, "new") )
     {
-        ioapic_ack_new = 1;
-        ioapic_ack_forced = 1;
+        ioapic_ack_new = true;
+        ioapic_ack_forced = true;
     }
     else
-        printk("Unknown ioapic_ack value specified: '%s'\n", s);
+        return -EINVAL;
+
+    return 0;
 }
 custom_param("ioapic_ack", setup_ioapic_ack);
 
-static bool_t io_apic_level_ack_pending(unsigned int irq)
+static bool io_apic_level_ack_pending(unsigned int irq)
 {
     struct irq_pin_list *entry;
     unsigned long flags;
@@ -1793,7 +1792,7 @@ static void enable_lapic_irq(struct irq_desc *desc)
     unsigned long v;
 
     v = apic_read(APIC_LVT0);
-    apic_write_around(APIC_LVT0, v & ~APIC_LVT_MASKED);
+    apic_write(APIC_LVT0, v & ~APIC_LVT_MASKED);
 }
 
 static void disable_lapic_irq(struct irq_desc *desc)
@@ -1801,7 +1800,7 @@ static void disable_lapic_irq(struct irq_desc *desc)
     unsigned long v;
 
     v = apic_read(APIC_LVT0);
-    apic_write_around(APIC_LVT0, v | APIC_LVT_MASKED);
+    apic_write(APIC_LVT0, v | APIC_LVT_MASKED);
 }
 
 static void ack_lapic_irq(struct irq_desc *desc)
@@ -1906,7 +1905,7 @@ static void __init check_timer(void)
      * the 8259A which implies the virtual wire has to be
      * disabled in the local APIC.
      */
-    apic_write_around(APIC_LVT0, APIC_LVT_MASKED | APIC_DM_EXTINT);
+    apic_write(APIC_LVT0, APIC_LVT_MASKED | APIC_DM_EXTINT);
     init_8259A(1);
     /* XEN: Ripped out the legacy missed-tick logic, so below is not needed. */
     /*timer_ack = 1;*/
@@ -1966,7 +1965,7 @@ static void __init check_timer(void)
 
     disable_8259A_irq(irq_to_desc(0));
     irq_desc[0].handler = &lapic_irq_type;
-    apic_write_around(APIC_LVT0, APIC_DM_FIXED | vector);	/* Fixed mode */
+    apic_write(APIC_LVT0, APIC_DM_FIXED | vector);	/* Fixed mode */
     enable_8259A_irq(irq_to_desc(0));
 
     if (timer_irq_works()) {
@@ -1974,7 +1973,7 @@ static void __init check_timer(void)
         printk(" works.\n");
         return;
     }
-    apic_write_around(APIC_LVT0, APIC_LVT_MASKED | APIC_DM_FIXED | vector);
+    apic_write(APIC_LVT0, APIC_LVT_MASKED | APIC_DM_FIXED | vector);
     printk(" failed.\n");
 
     printk(KERN_INFO "...trying to set up timer as ExtINT IRQ...");
@@ -1982,7 +1981,7 @@ static void __init check_timer(void)
     /*timer_ack = 0;*/
     init_8259A(0);
     make_8259A_irq(0);
-    apic_write_around(APIC_LVT0, APIC_DM_EXTINT);
+    apic_write(APIC_LVT0, APIC_DM_EXTINT);
 
     unlock_ExtINT_logic();
 
@@ -2277,8 +2276,6 @@ static int ioapic_physbase_to_id(unsigned long physbase)
     return -EINVAL;
 }
 
-unsigned apic_gsi_base(int apic);
-
 static int apic_pin_2_gsi_irq(int apic, int pin)
 {
     int idx;
@@ -2289,7 +2286,7 @@ static int apic_pin_2_gsi_irq(int apic, int pin)
     idx = find_irq_entry(apic, pin, mp_INT);
 
     return idx >= 0 ? pin_2_irq(idx, apic, pin)
-                    : apic_gsi_base(apic) + pin;
+                    : io_apic_gsi_base(apic) + pin;
 }
 
 int ioapic_guest_read(unsigned long physbase, unsigned int reg, u32 *pval)
@@ -2503,7 +2500,7 @@ void dump_ioapic_irq_info(void)
 static unsigned int __initdata max_gsi_irqs;
 integer_param("max_gsi_irqs", max_gsi_irqs);
 
-static __init bool_t bad_ioapic_register(unsigned int idx)
+static __init bool bad_ioapic_register(unsigned int idx)
 {
     union IO_APIC_reg_00 reg_00 = { .raw = io_apic_read(idx, 0) };
     union IO_APIC_reg_01 reg_01 = { .raw = io_apic_read(idx, 1) };
@@ -2536,8 +2533,8 @@ void __init init_ioapic_mappings(void)
             {
                 printk(KERN_ERR "WARNING: bogus zero IO-APIC address "
                        "found in MPTABLE, disabling IO/APIC support!\n");
-                smp_found_config = 0;
-                skip_ioapic_setup = 1;
+                smp_found_config = false;
+                skip_ioapic_setup = true;
                 goto fake_ioapic_page;
             }
         }

@@ -18,7 +18,6 @@
 #ifndef __ASM_X86_HVM_VMX_VMCS_H__
 #define __ASM_X86_HVM_VMX_VMCS_H__
 
-#include <asm/vpmu.h>
 #include <asm/hvm/io.h>
 #include <irq_vectors.h>
 
@@ -27,8 +26,8 @@ extern void setup_vmcs_dump(void);
 extern int  vmx_cpu_up_prepare(unsigned int cpu);
 extern void vmx_cpu_dead(unsigned int cpu);
 extern int  vmx_cpu_up(void);
+extern int  _vmx_cpu_up(bool bsp);
 extern void vmx_cpu_down(void);
-extern void vmx_save_host_msrs(void);
 
 struct vmcs_struct {
     u32 vmcs_revision_id;
@@ -41,29 +40,16 @@ struct vmx_msr_entry {
     u64 data;
 };
 
-enum {
-    VMX_INDEX_MSR_LSTAR = 0,
-    VMX_INDEX_MSR_STAR,
-    VMX_INDEX_MSR_SYSCALL_MASK,
-
-    VMX_MSR_COUNT
-};
-
-struct vmx_msr_state {
-    unsigned long flags;
-    unsigned long msrs[VMX_MSR_COUNT];
-};
-
 #define EPT_DEFAULT_MT      MTRR_TYPE_WRBACK
 
 struct ept_data {
     union {
-    struct {
-            u64 ept_mt :3,
-                ept_wl :3,
-                ept_ad :1,  /* bit 6 - enable EPT A/D bits */
-                rsvd   :5,
-                asr    :52;
+        struct {
+            uint64_t mt:3,   /* Memory Type. */
+                     wl:3,   /* Walk length -1. */
+                     ad:1,   /* Enable EPT A/D bits. */
+                     :5,     /* rsvd. */
+                     mfn:52;
         };
         u64 eptp;
     };
@@ -77,65 +63,18 @@ struct vmx_domain {
     unsigned long apic_access_mfn;
     /* VMX_DOMAIN_* */
     unsigned int status;
+};
 
-    /*
-     * To handle posted interrupts correctly, we need to set the following
-     * state:
-     *
-     * * The PI notification vector (NV)
-     * * The PI notification destination processor (NDST)
-     * * The PI "suppress notification" bit (SN)
-     * * The vcpu pi "blocked" list
-     *
-     * If a VM is currently running, we want the PI delivered to the guest vcpu
-     * on the proper pcpu (NDST = v->processor, SN clear).
-     *
-     * If the vm is blocked, we want the PI delivered to Xen so that it can
-     * wake it up  (SN clear, NV = pi_wakeup_vector, vcpu on block list).
-     *
-     * If the VM is currently either preempted or offline (i.e., not running
-     * because of some reason other than blocking waiting for an interrupt),
-     * there's nothing Xen can do -- we want the interrupt pending bit set in
-     * the guest, but we don't want to bother Xen with an interrupt (SN clear).
-     *
-     * There's a brief window of time between vmx_intr_assist() and checking
-     * softirqs where if an interrupt comes in it may be lost; so we need Xen
-     * to get an interrupt and raise a softirq so that it will go through the
-     * vmx_intr_assist() path again (SN clear, NV = posted_interrupt).
-     *
-     * The way we implement this now is by looking at what needs to happen on
-     * the following runstate transitions:
-     *
-     * A: runnable -> running
-     *  - SN = 0
-     *  - NDST = v->processor
-     * B: running -> runnable
-     *  - SN = 1
-     * C: running -> blocked
-     *  - NV = pi_wakeup_vector
-     *  - Add vcpu to blocked list
-     * D: blocked -> runnable
-     *  - NV = posted_intr_vector
-     *  - Take vcpu off blocked list
-     *
-     * For transitions A and B, we add hooks into vmx_ctxt_switch_{from,to}
-     * paths.
-     *
-     * For transition C, we add a new arch hook, arch_vcpu_block(), which is
-     * called from vcpu_block() and vcpu_do_poll().
-     *
-     * For transition D, rather than add an extra arch hook on vcpu_wake, we
-     * add a hook on the vmentry path which checks to see if either of the two
-     * actions need to be taken.
-     *
-     * These hooks only need to be called when the domain in question actually
-     * has a physical device assigned to it, so we set and clear the callbacks
-     * as appropriate when device assignment changes.
-     */
-    void (*vcpu_block) (struct vcpu *);
-    void (*pi_switch_from) (struct vcpu *v);
-    void (*pi_switch_to) (struct vcpu *v);
-    void (*pi_do_resume) (struct vcpu *v);
+/*
+ * Layout of the MSR bitmap, as interpreted by hardware:
+ *  - *_low  covers MSRs 0 to 0x1fff
+ *  - *_ligh covers MSRs 0xc0000000 to 0xc0001fff
+ */
+struct vmx_msr_bitmap {
+    unsigned long read_low  [0x2000 / BITS_PER_LONG];
+    unsigned long read_high [0x2000 / BITS_PER_LONG];
+    unsigned long write_low [0x2000 / BITS_PER_LONG];
+    unsigned long write_high[0x2000 / BITS_PER_LONG];
 };
 
 struct pi_desc {
@@ -153,10 +92,6 @@ struct pi_desc {
     };
     u32 rsvd[6];
 } __attribute__ ((aligned (64)));
-
-#define ept_get_wl(ept)   ((ept)->ept_wl)
-#define ept_get_asr(ept)  ((ept)->asr)
-#define ept_get_eptp(ept) ((ept)->eptp)
 
 #define NR_PML_ENTRIES   512
 
@@ -188,11 +123,13 @@ struct arch_vmx_struct {
     u32                  secondary_exec_control;
     u32                  exception_bitmap;
 
-    struct vmx_msr_state msr_state;
-    unsigned long        shadow_gs;
-    unsigned long        cstar;
+    uint64_t             shadow_gs;
+    uint64_t             star;
+    uint64_t             lstar;
+    uint64_t             cstar;
+    uint64_t             sfmask;
 
-    unsigned long       *msr_bitmap;
+    struct vmx_msr_bitmap *msr_bitmap;
     unsigned int         msr_count;
     struct vmx_msr_entry *msr_area;
     unsigned int         host_msr_count;
@@ -211,6 +148,9 @@ struct arch_vmx_struct {
     uint8_t              vmx_realmode;
     /* Are we emulating rather than VMENTERing? */
     uint8_t              vmx_emulate;
+
+    uint8_t              lbr_fixup_enabled;
+
     /* Bitmask of segments that we can't safely use in virtual 8086 mode */
     uint16_t             vm86_segment_mask;
     /* Shadow CS, SS, DS, ES, FS, GS, TR while in virtual 8086 mode */
@@ -347,6 +287,8 @@ extern u64 vmx_ept_vpid_cap;
     (vmx_cpu_based_exec_control & CPU_BASED_ACTIVATE_SECONDARY_CONTROLS)
 #define cpu_has_vmx_ept \
     (vmx_secondary_exec_control & SECONDARY_EXEC_ENABLE_EPT)
+#define cpu_has_vmx_dt_exiting \
+    (vmx_secondary_exec_control & SECONDARY_EXEC_DESCRIPTOR_TABLE_EXITING)
 #define cpu_has_vmx_vpid \
     (vmx_secondary_exec_control & SECONDARY_EXEC_ENABLE_VPID)
 #define cpu_has_monitor_trap_flag \
@@ -421,6 +363,7 @@ enum vmcs_field {
     VIRTUAL_PROCESSOR_ID            = 0x00000000,
     POSTED_INTR_NOTIFICATION_VECTOR = 0x00000002,
     EPTP_INDEX                      = 0x00000004,
+#define GUEST_SEG_SELECTOR(sel) (GUEST_ES_SELECTOR + (sel) * 2) /* ES ... GS */
     GUEST_ES_SELECTOR               = 0x00000800,
     GUEST_CS_SELECTOR               = 0x00000802,
     GUEST_SS_SELECTOR               = 0x00000804,
@@ -497,6 +440,7 @@ enum vmcs_field {
     IDT_VECTORING_ERROR_CODE        = 0x0000440a,
     VM_EXIT_INSTRUCTION_LEN         = 0x0000440c,
     VMX_INSTRUCTION_INFO            = 0x0000440e,
+#define GUEST_SEG_LIMIT(sel) (GUEST_ES_LIMIT + (sel) * 2) /* ES ... GS */
     GUEST_ES_LIMIT                  = 0x00004800,
     GUEST_CS_LIMIT                  = 0x00004802,
     GUEST_SS_LIMIT                  = 0x00004804,
@@ -507,6 +451,7 @@ enum vmcs_field {
     GUEST_TR_LIMIT                  = 0x0000480e,
     GUEST_GDTR_LIMIT                = 0x00004810,
     GUEST_IDTR_LIMIT                = 0x00004812,
+#define GUEST_SEG_AR_BYTES(sel) (GUEST_ES_AR_BYTES + (sel) * 2) /* ES ... GS */
     GUEST_ES_AR_BYTES               = 0x00004814,
     GUEST_CS_AR_BYTES               = 0x00004816,
     GUEST_SS_AR_BYTES               = 0x00004818,
@@ -532,6 +477,7 @@ enum vmcs_field {
     GUEST_CR0                       = 0x00006800,
     GUEST_CR3                       = 0x00006802,
     GUEST_CR4                       = 0x00006804,
+#define GUEST_SEG_BASE(sel) (GUEST_ES_BASE + (sel) * 2) /* ES ... GS */
     GUEST_ES_BASE                   = 0x00006806,
     GUEST_CS_BASE                   = 0x00006808,
     GUEST_SS_BASE                   = 0x0000680a,
@@ -565,29 +511,53 @@ enum vmcs_field {
 
 #define VMCS_VPID_WIDTH 16
 
-#define MSR_TYPE_R 1
-#define MSR_TYPE_W 2
-
 #define VMX_GUEST_MSR 0
 #define VMX_HOST_MSR  1
 
-/* VM Instruction error numbers. */
-#define VMX_INSN_INVALID_CONTROL_STATE       7
-#define VMX_INSN_INVALID_HOST_STATE          8
+/* VM Instruction error numbers */
+enum vmx_insn_errno
+{
+    VMX_INSN_SUCCEED                       = 0,
+    VMX_INSN_VMCLEAR_INVALID_PHYADDR       = 2,
+    VMX_INSN_VMLAUNCH_NONCLEAR_VMCS        = 4,
+    VMX_INSN_VMRESUME_NONLAUNCHED_VMCS     = 5,
+    VMX_INSN_INVALID_CONTROL_STATE         = 7,
+    VMX_INSN_INVALID_HOST_STATE            = 8,
+    VMX_INSN_VMPTRLD_INVALID_PHYADDR       = 9,
+    VMX_INSN_VMPTRLD_INCORRECT_VMCS_ID     = 11,
+    VMX_INSN_UNSUPPORTED_VMCS_COMPONENT    = 12,
+    VMX_INSN_VMXON_IN_VMX_ROOT             = 15,
+    VMX_INSN_VMENTRY_BLOCKED_BY_MOV_SS     = 26,
+    VMX_INSN_FAIL_INVALID                  = ~0,
+};
 
-void vmx_disable_intercept_for_msr(struct vcpu *v, u32 msr, int type);
-void vmx_enable_intercept_for_msr(struct vcpu *v, u32 msr, int type);
+enum vmx_msr_intercept_type {
+    VMX_MSR_R  = 1,
+    VMX_MSR_W  = 2,
+    VMX_MSR_RW = VMX_MSR_R | VMX_MSR_W,
+};
+
+void vmx_clear_msr_intercept(struct vcpu *v, unsigned int msr,
+                             enum vmx_msr_intercept_type type);
+void vmx_set_msr_intercept(struct vcpu *v, unsigned int msr,
+                           enum vmx_msr_intercept_type type);
 int vmx_read_guest_msr(u32 msr, u64 *val);
 int vmx_write_guest_msr(u32 msr, u64 val);
+struct vmx_msr_entry *vmx_find_msr(u32 msr, int type);
 int vmx_add_msr(u32 msr, int type);
 void vmx_vmcs_switch(paddr_t from, paddr_t to);
 void vmx_set_eoi_exit_bitmap(struct vcpu *v, u8 vector);
 void vmx_clear_eoi_exit_bitmap(struct vcpu *v, u8 vector);
-int vmx_check_msr_bitmap(unsigned long *msr_bitmap, u32 msr, int access_type);
+bool vmx_msr_is_intercepted(struct vmx_msr_bitmap *msr_bitmap,
+                            unsigned int msr, bool is_write) __nonnull(1);
 void virtual_vmcs_enter(const struct vcpu *);
 void virtual_vmcs_exit(const struct vcpu *);
 u64 virtual_vmcs_vmread(const struct vcpu *, u32 encoding);
+enum vmx_insn_errno virtual_vmcs_vmread_safe(const struct vcpu *v,
+                                             u32 vmcs_encoding, u64 *val);
 void virtual_vmcs_vmwrite(const struct vcpu *, u32 encoding, u64 val);
+enum vmx_insn_errno virtual_vmcs_vmwrite_safe(const struct vcpu *v,
+                                              u32 vmcs_encoding, u64 val);
 
 static inline int vmx_add_guest_msr(u32 msr)
 {

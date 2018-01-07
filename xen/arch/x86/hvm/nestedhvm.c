@@ -17,7 +17,7 @@
  */
 
 #include <asm/msr.h>
-#include <asm/hvm/support.h>	/* for HVM_DELIVER_NO_ERROR_CODE */
+#include <asm/hvm/support.h>
 #include <asm/hvm/hvm.h>
 #include <asm/p2m.h>    /* for struct p2m_domain */
 #include <asm/hvm/nestedhvm.h>
@@ -27,11 +27,10 @@
 static unsigned long *shadow_io_bitmap[3];
 
 /* Nested HVM on/off per domain */
-bool_t
-nestedhvm_enabled(struct domain *d)
+bool nestedhvm_enabled(const struct domain *d)
 {
-    return is_hvm_domain(d) &&
-           d->arch.hvm_domain.params[HVM_PARAM_NESTEDHVM];
+    return is_hvm_domain(d) && d->arch.hvm_domain.params &&
+        d->arch.hvm_domain.params[HVM_PARAM_NESTEDHVM];
 }
 
 /* Nested VCPU */
@@ -54,9 +53,11 @@ nestedhvm_vcpu_reset(struct vcpu *v)
 
     hvm_unmap_guest_frame(nv->nv_vvmcx, 1);
     nv->nv_vvmcx = NULL;
-    nv->nv_vvmcxaddr = VMCX_EADDR;
+    nv->nv_vvmcxaddr = INVALID_PADDR;
     nv->nv_flushp2m = 0;
     nv->nv_p2m = NULL;
+    nv->stale_np2m = false;
+    nv->np2m_generation = 0;
 
     hvm_asid_flush_vcpu_asid(&nv->nv_n2asid);
 
@@ -108,6 +109,7 @@ nestedhvm_flushtlb_ipi(void *info)
      */
     hvm_asid_flush_core();
     vcpu_nestedhvm(v).nv_p2m = NULL;
+    vcpu_nestedhvm(v).stale_np2m = true;
 }
 
 void

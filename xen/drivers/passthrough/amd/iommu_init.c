@@ -17,7 +17,6 @@
  * along with this program; If not, see <http://www.gnu.org/licenses/>.
  */
 
-#include <xen/config.h>
 #include <xen/errno.h>
 #include <xen/acpi.h>
 #include <xen/pci.h>
@@ -559,7 +558,7 @@ static void parse_event_log_entry(struct amd_iommu *iommu, u32 entry[])
             return;
         }
         udelay(1);
-        rmb();
+        barrier(); /* Prevent hoisting of the entry[] read. */
         code = get_field_from_reg_u32(entry[1], IOMMU_EVENT_CODE_MASK,
                                       IOMMU_EVENT_CODE_SHIFT);
     }
@@ -664,7 +663,7 @@ void parse_ppr_log_entry(struct amd_iommu *iommu, u32 entry[])
             return;
         }
         udelay(1);
-        rmb();
+        barrier(); /* Prevent hoisting of the entry[] read. */
         code = get_field_from_reg_u32(entry[1], IOMMU_PPR_LOG_CODE_MASK,
                                       IOMMU_PPR_LOG_CODE_SHIFT);
     }

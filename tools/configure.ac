@@ -21,8 +21,6 @@ hotplug/Linux/xen-hotplug-common.sh
 hotplug/Linux/xendomains
 hotplug/NetBSD/rc.d/xencommons
 hotplug/NetBSD/rc.d/xendriverdomain
-libxl/xenlight.pc.in
-libxl/xlutil.pc.in
 ocaml/xenstored/oxenstored.conf
 ])
 AC_CONFIG_HEADERS([config.h])
@@ -121,12 +119,8 @@ AC_SUBST(LINUX_BACKEND_MODULES)
 dnl Enable blktap2 on Linux only.
 AC_ARG_ENABLE([blktap2],
     AS_HELP_STRING([--enable-blktap2],
-                   [Enable blktap2, (DEFAULT is on for Linux, otherwise off)]),,[
-    case "$host_os" in
-        linux*)
-           enable_blktap2="yes";;
-        *) enable_blktap2="no";;
-    esac
+                   [Enable blktap2, (DEFAULT is off)]),,[
+        enable_blktap2="no"
 ])
 AS_IF([test "x$enable_blktap2" = "xyes"], [
 AC_DEFINE([HAVE_BLKTAP2], [1], [Blktap2 enabled])
@@ -320,7 +314,11 @@ AS_IF([test "x$xsmpolicy" = "xy"], [
         xsmpolicy="n"
     ])
 ])
-AX_PATH_PROG_OR_FAIL([BASH], [bash])
+dnl FreeBSD doesn't require bash (hotplug scripts are in plain sh)
+case "$host_os" in
+  freebsd*) ;;
+  *) AX_PATH_PROG_OR_FAIL([BASH], [bash]);;
+esac
 AS_IF([echo "$PYTHON" | grep -q "^/"], [
     PYTHONPATH=$PYTHON
     PYTHON=`basename $PYTHONPATH`

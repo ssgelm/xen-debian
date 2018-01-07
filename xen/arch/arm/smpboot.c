@@ -59,7 +59,7 @@ struct init_info __initdata init_data =
 /* Shared state for coordinating CPU bringup */
 unsigned long smp_up_cpu = MPIDR_INVALID;
 /* Shared state for coordinating CPU teardown */
-static bool_t cpu_is_dead = 0;
+static bool cpu_is_dead;
 
 /* ID of the PCPU we're running on */
 DEFINE_PER_CPU(unsigned int, cpu_id);
@@ -105,7 +105,7 @@ static void __init dt_smp_init_cpus(void)
     {
         [0 ... NR_CPUS - 1] = MPIDR_INVALID
     };
-    bool_t bootcpu_valid = 0;
+    bool bootcpu_valid = false;
     int rc;
 
     mpidr = boot_cpu_data.mpidr.bits & MPIDR_HWID_MASK;
@@ -197,7 +197,7 @@ static void __init dt_smp_init_cpus(void)
         if ( hwid == mpidr )
         {
             i = 0;
-            bootcpu_valid = 1;
+            bootcpu_valid = true;
         }
         else
             i = cpuidx++;
@@ -307,11 +307,14 @@ void start_secondary(unsigned long boot_phys_offset,
 
     /* Run local notifiers */
     notify_cpu_starting(cpuid);
+    /*
+     * Ensure that previous writes are visible before marking the cpu as
+     * online.
+     */
     smp_wmb();
 
     /* Now report this CPU is up */
     cpumask_set_cpu(cpuid, &cpu_online_map);
-    smp_wmb();
 
     local_irq_enable();
     local_abort_enable();
@@ -349,7 +352,7 @@ void __cpu_disable(void)
 void stop_cpu(void)
 {
     local_irq_disable();
-    cpu_is_dead = 1;
+    cpu_is_dead = true;
     /* Make sure the write happens before we sleep forever */
     dsb(sy);
     isb();
@@ -408,6 +411,11 @@ int __cpu_up(unsigned int cpu)
         cpu_relax();
         process_pending_softirqs();
     }
+    /*
+     * Ensure that other cpus' initializations are visible before
+     * proceeding. Corresponds to smp_wmb() in start_secondary.
+     */
+    smp_rmb();
 
     /*
      * Nuke start of day info before checking one last time if the CPU
@@ -446,7 +454,7 @@ void __cpu_die(unsigned int cpu)
             printk(KERN_ERR "CPU %u still not dead...\n", cpu);
         smp_mb();
     }
-    cpu_is_dead = 0;
+    cpu_is_dead = false;
     smp_mb();
 }
 

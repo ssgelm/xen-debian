@@ -16,7 +16,6 @@
  * it's possible to reconstruct a chronological record of trace events.
  */
 
-#include <xen/config.h>
 #include <asm/types.h>
 #include <asm/io.h>
 #include <xen/lib.h>
@@ -368,9 +367,9 @@ void __init init_trace_bufs(void)
 
 /**
  * tb_control - sysctl operations on trace buffers.
- * @tbc: a pointer to a xen_sysctl_tbuf_op_t to be filled out
+ * @tbc: a pointer to a struct xen_sysctl_tbuf_op to be filled out
  */
-int tb_control(xen_sysctl_tbuf_op_t *tbc)
+int tb_control(struct xen_sysctl_tbuf_op *tbc)
 {
     static DEFINE_SPINLOCK(lock);
     int rc = 0;

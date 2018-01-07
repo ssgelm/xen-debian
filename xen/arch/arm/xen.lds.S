@@ -2,7 +2,6 @@
 /* Modified for i386/x86-64 Xen by Keir Fraser */
 /* Modified for ARM Xen by Ian Campbell */
 
-#include <xen/config.h>
 #include <xen/cache.h>
 #include <asm/page.h>
 #include <asm/percpu.h>
@@ -21,7 +20,7 @@ OUTPUT_ARCH(FORMAT)
 
 PHDRS
 {
-  text PT_LOAD /* XXX should be AT ( XEN_PHYS_START ) */ ;
+  text PT_LOAD ;
 #if defined(BUILD_ID)
   note PT_NOTE ;
 #endif
@@ -30,7 +29,7 @@ SECTIONS
 {
   . = XEN_VIRT_START;
   _start = .;
-  .text : /* XXX should be AT ( XEN_PHYS_START ) */ {
+  .text : {
         _stext = .;            /* Text section */
        *(.text)
        *(.text.cold)
@@ -53,6 +52,8 @@ SECTIONS
        __stop_bug_frames_2 = .;
        *(.rodata)
        *(.rodata.*)
+       *(.data.rel.ro)
+       *(.data.rel.ro.*)
 
 #ifdef CONFIG_LOCK_PROFILE
        . = ALIGN(POINTER_ALIGN);
@@ -60,6 +61,10 @@ SECTIONS
        *(.lockprofile.data)
        __lock_profile_end = .;
 #endif
+       . = ALIGN(POINTER_ALIGN);
+       __param_start = .;
+       *(.data.param)
+       __param_end = .;
   } :text
 
 #if defined(BUILD_ID)
@@ -98,8 +103,6 @@ SECTIONS
        __stop___pre_ex_table = .;
 
        *(.data.read_mostly)
-       *(.data.rel.ro)
-       *(.data.rel.ro.*)
   } :text
 
   . = ALIGN(8);

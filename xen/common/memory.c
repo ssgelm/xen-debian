@@ -7,7 +7,6 @@
  * Copyright (c) 2003-2005, K A Fraser
  */
 
-#include <xen/config.h>
 #include <xen/types.h>
 #include <xen/lib.h>
 #include <xen/mm.h>
@@ -56,7 +55,8 @@ static unsigned int __read_mostly hwdom_max_order = CONFIG_HWDOM_MAX_ORDER;
 #ifdef HAS_PASSTHROUGH
 static unsigned int __read_mostly ptdom_max_order = CONFIG_PTDOM_MAX_ORDER;
 #endif
-static void __init parse_max_order(const char *s)
+
+static int __init parse_max_order(const char *s)
 {
     if ( *s != ',' )
         domu_max_order = simple_strtoul(s, &s, 0);
@@ -68,6 +68,8 @@ static void __init parse_max_order(const char *s)
     if ( *s == ',' && *++s != ',' )
         ptdom_max_order = simple_strtoul(s, &s, 0);
 #endif
+
+    return *s ? -EINVAL : 0;
 }
 custom_param("memop-max-order", parse_max_order);
 
@@ -153,16 +155,26 @@ static void populate_physmap(struct memop_args *a)
                             max_order(curr_d)) )
         return;
 
-    /*
-     * With MEMF_no_tlbflush set, alloc_heap_pages() will ignore
-     * TLB-flushes. After VM creation, this is a security issue (it can
-     * make pages accessible to guest B, when guest A may still have a
-     * cached mapping to them). So we do this only during domain creation,
-     * when the domain itself has not yet been unpaused for the first
-     * time.
-     */
     if ( unlikely(!d->creation_finished) )
+    {
+        /*
+         * With MEMF_no_tlbflush set, alloc_heap_pages() will ignore
+         * TLB-flushes. After VM creation, this is a security issue (it can
+         * make pages accessible to guest B, when guest A may still have a
+         * cached mapping to them). So we do this only during domain creation,
+         * when the domain itself has not yet been unpaused for the first
+         * time.
+         */
         a->memflags |= MEMF_no_tlbflush;
+        /*
+         * With MEMF_no_icache_flush, alloc_heap_pages() will skip
+         * performing icache flushes. We do it only before domain
+         * creation as once the domain is running there is a danger of
+         * executing instructions from stale caches if icache flush is
+         * delayed.
+         */
+        a->memflags |= MEMF_no_icache_flush;
+    }
 
     for ( i = a->nr_done; i < a->nr_extents; i++ )
     {
@@ -193,7 +205,7 @@ static void populate_physmap(struct memop_args *a)
 
                 for ( j = 0; j < (1U << a->extent_order); j++, mfn++ )
                 {
-                    if ( !mfn_valid(mfn) )
+                    if ( !mfn_valid(_mfn(mfn)) )
                     {
                         gdprintk(XENLOG_INFO, "Invalid mfn %#"PRI_xen_pfn"\n",
                                  mfn);
@@ -212,7 +224,6 @@ static void populate_physmap(struct memop_args *a)
                 }
 
                 mfn = gpfn;
-                page = mfn_to_page(mfn);
             }
             else
             {
@@ -255,6 +266,10 @@ static void populate_physmap(struct memop_args *a)
 out:
     if ( need_tlbflush )
         filtered_flush_tlb_mask(tlbflush_timestamp);
+
+    if ( a->memflags & MEMF_no_icache_flush )
+        invalidate_icache();
+
     a->nr_done = i;
 }
 
@@ -281,7 +296,7 @@ int guest_remove_page(struct domain *d, unsigned long gmfn)
          * actual page that needs to be released. */
         if ( p2mt == p2m_ram_paging_out )
         {
-            ASSERT(mfn_valid(mfn_x(mfn)));
+            ASSERT(mfn_valid(mfn));
             page = mfn_to_page(mfn_x(mfn));
             if ( test_and_clear_bit(_PGC_allocated, &page->count_info) )
                 put_page(page);
@@ -300,7 +315,7 @@ int guest_remove_page(struct domain *d, unsigned long gmfn)
 #else
     mfn = gfn_to_mfn(d, _gfn(gmfn));
 #endif
-    if ( unlikely(!mfn_valid(mfn_x(mfn))) )
+    if ( unlikely(!mfn_valid(mfn)) )
     {
         put_gfn(d, gmfn);
         gdprintk(XENLOG_INFO, "Domain %u page number %lx invalid\n",
@@ -342,8 +357,10 @@ int guest_remove_page(struct domain *d, unsigned long gmfn)
 
     rc = guest_physmap_remove_page(d, _gfn(gmfn), mfn, 0);
 
+#ifdef _PGT_pinned
     if ( !rc && test_and_clear_bit(_PGT_pinned, &page->u.inuse.type_info) )
         put_page_and_type(page);
+#endif
 
     /*
      * With the lack of an IOMMU on some platforms, domains with DMA-capable
@@ -400,7 +417,8 @@ static void decrease_reservation(struct memop_args *a)
 
         /* See if populate-on-demand wants to handle this */
         if ( is_hvm_domain(a->domain)
-             && p2m_pod_decrease_reservation(a->domain, gmfn, a->extent_order) )
+             && p2m_pod_decrease_reservation(a->domain, _gfn(gmfn),
+                                             a->extent_order) )
             continue;
 
         for ( j = 0; j < (1 << a->extent_order); j++ )
@@ -575,7 +593,7 @@ static long memory_exchange(XEN_GUEST_HANDLE_PARAM(xen_memory_exchange_t) arg)
 #else /* !CONFIG_X86 */
                 mfn = mfn_x(gfn_to_mfn(d, _gfn(gmfn + k)));
 #endif
-                if ( unlikely(!mfn_valid(mfn)) )
+                if ( unlikely(!mfn_valid(_mfn(mfn))) )
                 {
                     put_gfn(d, gmfn + k);
                     rc = -EINVAL;
@@ -584,10 +602,10 @@ static long memory_exchange(XEN_GUEST_HANDLE_PARAM(xen_memory_exchange_t) arg)
 
                 page = mfn_to_page(mfn);
 
-                if ( unlikely(steal_page(d, page, MEMF_no_refcount)) )
+                rc = steal_page(d, page, MEMF_no_refcount);
+                if ( unlikely(rc) )
                 {
                     put_gfn(d, gmfn + k);
-                    rc = -EINVAL;
                     goto fail;
                 }
 
@@ -804,6 +822,11 @@ static int xenmem_add_to_physmap_batch(struct domain *d,
     guest_handle_add_offset(xatpb->gpfns, start);
     guest_handle_add_offset(xatpb->errs, start);
     xatpb->size -= start;
+
+    if ( !guest_handle_okay(xatpb->idxs, xatpb->size) ||
+         !guest_handle_okay(xatpb->gpfns, xatpb->size) ||
+         !guest_handle_okay(xatpb->errs, xatpb->size) )
+        return -EFAULT;
 
     while ( xatpb->size > done )
     {
@@ -1123,10 +1146,7 @@ long do_memory_op(unsigned long cmd, XEN_GUEST_HANDLE_PARAM(void) arg)
         if ( start_extent != (typeof(xatpb.size))start_extent )
             return -EDOM;
 
-        if ( copy_from_guest(&xatpb, arg, 1) ||
-             !guest_handle_okay(xatpb.idxs, xatpb.size) ||
-             !guest_handle_okay(xatpb.gpfns, xatpb.size) ||
-             !guest_handle_okay(xatpb.errs, xatpb.size) )
+        if ( copy_from_guest(&xatpb, arg, 1) )
             return -EFAULT;
 
         /* This mapspace is unsupported for this hypercall. */

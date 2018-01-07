@@ -1,4 +1,3 @@
-#include <xen/config.h>
 #include <xen/init.h>
 #include <xen/types.h>
 #include <xen/lib.h>
@@ -48,8 +47,6 @@ static uint64_t __initdata sinit_base, __initdata sinit_size;
 #define TXTCR_SINIT_SIZE            0x0278
 #define TXTCR_HEAP_BASE             0x0300
 #define TXTCR_HEAP_SIZE             0x0308
-
-extern char __init_begin[], __bss_start[], __bss_end[];
 
 #define SHA1_SIZE      20
 typedef uint8_t   sha1_hash_t[SHA1_SIZE];
@@ -189,7 +186,7 @@ static void update_pagetable_mac(vmac_ctx_t *ctx)
     {
         struct page_info *page = mfn_to_page(mfn);
 
-        if ( !mfn_valid(mfn) )
+        if ( !mfn_valid(_mfn(mfn)) )
             continue;
         if ( is_page_in_use(page) && !is_xen_heap_page(page) )
         {
@@ -281,7 +278,7 @@ static void tboot_gen_xenheap_integrity(const uint8_t key[TB_KEY_SIZE],
     {
         struct page_info *page = __mfn_to_page(mfn);
 
-        if ( !mfn_valid(mfn) )
+        if ( !mfn_valid(_mfn(mfn)) )
             continue;
         if ( is_xen_fixed_mfn(mfn) )
             continue; /* skip Xen */
@@ -344,8 +341,6 @@ void tboot_shutdown(uint32_t shutdown_type)
 
     g_tboot_shared->shutdown_type = shutdown_type;
 
-    local_irq_disable();
-
     /* Create identity map for tboot shutdown code. */
     /* do before S3 integrity because mapping tboot may change xenheap */
     map_base = PFN_DOWN(g_tboot_shared->tboot_base);
@@ -359,6 +354,10 @@ void tboot_shutdown(uint32_t shutdown_type)
                map_base, map_size);
         return;
     }
+
+    /* Disable interrupts as early as possible but not prior to */
+    /* calling map_pages_to_xen */
+    local_irq_disable();
 
     /* if this is S3 then set regions to MAC */
     if ( shutdown_type == TB_SHUTDOWN_S3 )

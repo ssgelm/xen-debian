@@ -40,7 +40,7 @@ string_param("console", opt_console);
 /* Char 2: If this character is 'x', then do not auto-switch to DOM0 when it */
 /*         boots. Any other value, or omitting the char, enables auto-switch */
 static unsigned char __read_mostly opt_conswitch[3] = "a";
-string_param("conswitch", opt_conswitch);
+string_runtime_param("conswitch", opt_conswitch);
 
 /* sync_console: force synchronous console output (useful for debugging). */
 static bool_t __initdata opt_sync_console;
@@ -67,8 +67,8 @@ enum con_timestamp_mode
 
 static enum con_timestamp_mode __read_mostly opt_con_timestamp_mode = TSM_NONE;
 
-static void parse_console_timestamps(char *s);
-custom_param("console_timestamps", parse_console_timestamps);
+static int parse_console_timestamps(const char *s);
+custom_runtime_param("console_timestamps", parse_console_timestamps);
 
 /* conring_size: allows a large console ring than default (16kB). */
 static uint32_t __initdata opt_conring_size;
@@ -123,8 +123,8 @@ static int __read_mostly xenlog_guest_upper_thresh =
 static int __read_mostly xenlog_guest_lower_thresh =
     XENLOG_GUEST_LOWER_THRESHOLD;
 
-static void parse_loglvl(char *s);
-static void parse_guest_loglvl(char *s);
+static int parse_loglvl(const char *s);
+static int parse_guest_loglvl(const char *s);
 
 /*
  * <lvl> := none|error|warning|info|debug|all
@@ -134,8 +134,8 @@ static void parse_guest_loglvl(char *s);
  * Similar definitions for guest_loglvl, but applies to guest tracing.
  * Defaults: loglvl=warning ; guest_loglvl=none/warning
  */
-custom_param("loglvl", parse_loglvl);
-custom_param("guest_loglvl", parse_guest_loglvl);
+custom_runtime_param("loglvl", parse_loglvl);
+custom_runtime_param("guest_loglvl", parse_guest_loglvl);
 
 static atomic_t print_everything = ATOMIC_INIT(0);
 
@@ -145,7 +145,7 @@ static atomic_t print_everything = ATOMIC_INIT(0);
         return (lvlnum);                                \
     }
 
-static int __init __parse_loglvl(char *s, char **ps)
+static int __parse_loglvl(const char *s, const char **ps)
 {
     ___parse_loglvl(s, ps, "none",    0);
     ___parse_loglvl(s, ps, "error",   1);
@@ -156,26 +156,29 @@ static int __init __parse_loglvl(char *s, char **ps)
     return 2; /* sane fallback */
 }
 
-static void __init _parse_loglvl(char *s, int *lower, int *upper)
+static int _parse_loglvl(const char *s, int *lower, int *upper)
 {
     *lower = *upper = __parse_loglvl(s, &s);
     if ( *s == '/' )
         *upper = __parse_loglvl(s+1, &s);
     if ( *upper < *lower )
         *upper = *lower;
+
+    return *s ? -EINVAL : 0;
 }
 
-static void __init parse_loglvl(char *s)
+static int parse_loglvl(const char *s)
 {
-    _parse_loglvl(s, &xenlog_lower_thresh, &xenlog_upper_thresh);
+    return _parse_loglvl(s, &xenlog_lower_thresh, &xenlog_upper_thresh);
 }
 
-static void __init parse_guest_loglvl(char *s)
+static int parse_guest_loglvl(const char *s)
 {
-    _parse_loglvl(s, &xenlog_guest_lower_thresh, &xenlog_guest_upper_thresh);
+    return _parse_loglvl(s, &xenlog_guest_lower_thresh,
+                         &xenlog_guest_upper_thresh);
 }
 
-static char * __init loglvl_str(int lvl)
+static char *loglvl_str(int lvl)
 {
     switch ( lvl )
     {
@@ -186,6 +189,50 @@ static char * __init loglvl_str(int lvl)
     case 4: return "All";
     }
     return "???";
+}
+
+static int *__read_mostly upper_thresh_adj = &xenlog_upper_thresh;
+static int *__read_mostly lower_thresh_adj = &xenlog_lower_thresh;
+static const char *__read_mostly thresh_adj = "standard";
+
+static void do_toggle_guest(unsigned char key, struct cpu_user_regs *regs)
+{
+    if ( upper_thresh_adj == &xenlog_upper_thresh )
+    {
+        upper_thresh_adj = &xenlog_guest_upper_thresh;
+        lower_thresh_adj = &xenlog_guest_lower_thresh;
+        thresh_adj = "guest";
+    }
+    else
+    {
+        upper_thresh_adj = &xenlog_upper_thresh;
+        lower_thresh_adj = &xenlog_lower_thresh;
+        thresh_adj = "standard";
+    }
+    printk("'%c' pressed -> %s log level adjustments enabled\n",
+           key, thresh_adj);
+}
+
+static void do_adj_thresh(unsigned char key)
+{
+    if ( *upper_thresh_adj < *lower_thresh_adj )
+        *upper_thresh_adj = *lower_thresh_adj;
+    printk("'%c' pressed -> %s log level: %s (rate limited %s)\n",
+           key, thresh_adj, loglvl_str(*lower_thresh_adj),
+           loglvl_str(*upper_thresh_adj));
+}
+
+static void do_inc_thresh(unsigned char key, struct cpu_user_regs *regs)
+{
+    ++*lower_thresh_adj;
+    do_adj_thresh(key);
+}
+
+static void do_dec_thresh(unsigned char key, struct cpu_user_regs *regs)
+{
+    if ( *lower_thresh_adj )
+        --*lower_thresh_adj;
+    do_adj_thresh(key);
 }
 
 /*
@@ -210,20 +257,23 @@ static void conring_puts(const char *str)
 long read_console_ring(struct xen_sysctl_readconsole *op)
 {
     XEN_GUEST_HANDLE_PARAM(char) str;
-    uint32_t idx, len, max, sofar, c;
+    uint32_t idx, len, max, sofar, c, p;
 
     str   = guest_handle_cast(op->buffer, char),
     max   = op->count;
     sofar = 0;
 
-    c = conringc;
-    if ( op->incremental && ((int32_t)(op->index - c) > 0) )
+    c = read_atomic(&conringc);
+    p = read_atomic(&conringp);
+    if ( op->incremental &&
+         (c <= p ? c < op->index && op->index <= p
+                 : c < op->index || op->index <= p) )
         c = op->index;
 
-    while ( (c != conringp) && (sofar < max) )
+    while ( (c != p) && (sofar < max) )
     {
         idx = CONRING_IDX_MASK(c);
-        len = conringp - c;
+        len = p - c;
         if ( (idx + len) > conring_size )
             len = conring_size - idx;
         if ( (sofar + len) > max )
@@ -237,10 +287,7 @@ long read_console_ring(struct xen_sysctl_readconsole *op)
     if ( op->clear )
     {
         spin_lock_irq(&console_lock);
-        if ( (uint32_t)(conringp - c) > conring_size )
-            conringc = conringp - conring_size;
-        else
-            conringc = c;
+        conringc = p - c > conring_size ? p - conring_size : c;
         spin_unlock_irq(&console_lock);
     }
 
@@ -559,16 +606,16 @@ static int printk_prefix_check(char *p, char **pp)
             ((loglvl < upper_thresh) && printk_ratelimit()));
 } 
 
-static void __init parse_console_timestamps(char *s)
+static int parse_console_timestamps(const char *s)
 {
-    switch ( parse_bool(s) )
+    switch ( parse_bool(s, NULL) )
     {
     case 0:
         opt_con_timestamp_mode = TSM_NONE;
-        return;
+        return 0;
     case 1:
         opt_con_timestamp_mode = TSM_DATE;
-        return;
+        return 0;
     }
     if ( *s == '\0' || /* Compat for old booleanparam() */
          !strcmp(s, "date") )
@@ -579,6 +626,10 @@ static void __init parse_console_timestamps(char *s)
         opt_con_timestamp_mode = TSM_BOOT;
     else if ( !strcmp(s, "none") )
         opt_con_timestamp_mode = TSM_NONE;
+    else
+        return -EINVAL;
+
+    return 0;
 }
 
 static void printk_start_of_line(const char *prefix)
@@ -816,6 +867,12 @@ void __init console_endboot(void)
 
     register_keyhandler('w', dump_console_ring_key,
                         "synchronously dump console ring buffer (dmesg)", 0);
+    register_irq_keyhandler('+', &do_inc_thresh,
+                            "increase log level threshold", 0);
+    register_irq_keyhandler('-', &do_dec_thresh,
+                            "decrease log level threshold", 0);
+    register_irq_keyhandler('G', &do_toggle_guest,
+                            "toggle host/guest log level adjustment", 0);
 
     /* Serial input is directed to DOM0 by default. */
     switch_serial_input();

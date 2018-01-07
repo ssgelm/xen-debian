@@ -9,7 +9,7 @@
 #ifndef __ASM_X86_HVM_VIRIDIAN_H__
 #define __ASM_X86_HVM_VIRIDIAN_H__
 
-union viridian_apic_assist
+union viridian_vp_assist
 {   uint64_t raw;
     struct
     {
@@ -22,10 +22,11 @@ union viridian_apic_assist
 struct viridian_vcpu
 {
     struct {
-        union viridian_apic_assist msr;
+        union viridian_vp_assist msr;
         void *va;
         int vector;
-    } apic_assist;
+    } vp_assist;
+    uint64_t crash_param[5];
 };
 
 union viridian_guest_os_id
@@ -97,13 +98,8 @@ struct viridian_domain
     union viridian_reference_tsc reference_tsc;
 };
 
-int
-cpuid_viridian_leaves(
-    unsigned int leaf,
-    unsigned int *eax,
-    unsigned int *ebx,
-    unsigned int *ecx,
-    unsigned int *edx);
+void cpuid_viridian_leaves(const struct vcpu *v, uint32_t leaf,
+                           uint32_t subleaf, struct cpuid_leaf *res);
 
 int
 wrmsr_viridian_regs(

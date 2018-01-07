@@ -5,7 +5,6 @@
 #define __ASM_X86_PROCESSOR_H
 
 #ifndef __ASSEMBLY__
-#include <xen/config.h>
 #include <xen/cache.h>
 #include <xen/types.h>
 #include <xen/smp.h>
@@ -14,82 +13,11 @@
 #include <asm/types.h>
 #include <asm/cpufeature.h>
 #include <asm/desc.h>
+#include <asm/x86_emulate.h>
 #endif
 
-/*
- * CPU vendor IDs
- */
-#define X86_VENDOR_INTEL 0
-#define X86_VENDOR_CYRIX 1
-#define X86_VENDOR_AMD 2
-#define X86_VENDOR_UMC 3
-#define X86_VENDOR_NEXGEN 4
-#define X86_VENDOR_CENTAUR 5
-#define X86_VENDOR_RISE 6
-#define X86_VENDOR_TRANSMETA 7
-#define X86_VENDOR_NSC 8
-#define X86_VENDOR_NUM 9
-#define X86_VENDOR_UNKNOWN 0xff
-
-/*
- * EFLAGS bits
- */
-#define X86_EFLAGS_CF	0x00000001 /* Carry Flag */
-#define X86_EFLAGS_MBS	0x00000002 /* Resvd bit */
-#define X86_EFLAGS_PF	0x00000004 /* Parity Flag */
-#define X86_EFLAGS_AF	0x00000010 /* Auxillary carry Flag */
-#define X86_EFLAGS_ZF	0x00000040 /* Zero Flag */
-#define X86_EFLAGS_SF	0x00000080 /* Sign Flag */
-#define X86_EFLAGS_TF	0x00000100 /* Trap Flag */
-#define X86_EFLAGS_IF	0x00000200 /* Interrupt Flag */
-#define X86_EFLAGS_DF	0x00000400 /* Direction Flag */
-#define X86_EFLAGS_OF	0x00000800 /* Overflow Flag */
-#define X86_EFLAGS_IOPL	0x00003000 /* IOPL mask */
-#define X86_EFLAGS_NT	0x00004000 /* Nested Task */
-#define X86_EFLAGS_RF	0x00010000 /* Resume Flag */
-#define X86_EFLAGS_VM	0x00020000 /* Virtual Mode */
-#define X86_EFLAGS_AC	0x00040000 /* Alignment Check */
-#define X86_EFLAGS_VIF	0x00080000 /* Virtual Interrupt Flag */
-#define X86_EFLAGS_VIP	0x00100000 /* Virtual Interrupt Pending */
-#define X86_EFLAGS_ID	0x00200000 /* CPUID detection flag */
-
-/*
- * Intel CPU flags in CR0
- */
-#define X86_CR0_PE              0x00000001 /* Enable Protected Mode    (RW) */
-#define X86_CR0_MP              0x00000002 /* Monitor Coprocessor      (RW) */
-#define X86_CR0_EM              0x00000004 /* Require FPU Emulation    (RO) */
-#define X86_CR0_TS              0x00000008 /* Task Switched            (RW) */
-#define X86_CR0_ET              0x00000010 /* Extension type           (RO) */
-#define X86_CR0_NE              0x00000020 /* Numeric Error Reporting  (RW) */
-#define X86_CR0_WP              0x00010000 /* Supervisor Write Protect (RW) */
-#define X86_CR0_AM              0x00040000 /* Alignment Checking       (RW) */
-#define X86_CR0_NW              0x20000000 /* Not Write-Through        (RW) */
-#define X86_CR0_CD              0x40000000 /* Cache Disable            (RW) */
-#define X86_CR0_PG              0x80000000 /* Paging                   (RW) */
-
-/*
- * Intel CPU features in CR4
- */
-#define X86_CR4_VME        0x00000001 /* enable vm86 extensions */
-#define X86_CR4_PVI        0x00000002 /* virtual interrupts flag enable */
-#define X86_CR4_TSD        0x00000004 /* disable time stamp at ipl 3 */
-#define X86_CR4_DE         0x00000008 /* enable debugging extensions */
-#define X86_CR4_PSE        0x00000010 /* enable page size extensions */
-#define X86_CR4_PAE        0x00000020 /* enable physical address extensions */
-#define X86_CR4_MCE        0x00000040 /* Machine check enable */
-#define X86_CR4_PGE        0x00000080 /* enable global pages */
-#define X86_CR4_PCE        0x00000100 /* enable performance counters at ipl 3 */
-#define X86_CR4_OSFXSR     0x00000200 /* enable fast FPU save and restore */
-#define X86_CR4_OSXMMEXCPT 0x00000400 /* enable unmasked SSE exceptions */
-#define X86_CR4_VMXE       0x00002000 /* enable VMX */
-#define X86_CR4_SMXE       0x00004000 /* enable SMX */
-#define X86_CR4_FSGSBASE   0x00010000 /* enable {rd,wr}{fs,gs}base */
-#define X86_CR4_PCIDE      0x00020000 /* enable PCID */
-#define X86_CR4_OSXSAVE    0x00040000 /* enable XSAVE/XRSTOR */
-#define X86_CR4_SMEP       0x00100000 /* enable SMEP */
-#define X86_CR4_SMAP       0x00200000 /* enable SMAP */
-#define X86_CR4_PKE        0x00400000 /* enable PKE */
+#include <asm/x86-defns.h>
+#include <asm/x86-vendors.h>
 
 /*
  * Trap/fault mnemonics.
@@ -146,9 +74,12 @@
 #define PFEC_reserved_bit   (_AC(1,U) << 3)
 #define PFEC_insn_fetch     (_AC(1,U) << 4)
 #define PFEC_prot_key       (_AC(1,U) << 5)
+#define PFEC_arch_mask      (_AC(0xffff,U)) /* Architectural PFEC values. */
 /* Internally used only flags. */
 #define PFEC_page_paged     (1U<<16)
 #define PFEC_page_shared    (1U<<17)
+#define PFEC_implicit       (1U<<18) /* Pagewalk input for ldt/gdt/idt/tr accesses. */
+#define PFEC_synth_mask     (~PFEC_arch_mask) /* Synthetic PFEC values. */
 
 /* Other exception error code values. */
 #define X86_XEC_EXT         (_AC(1,U) << 0)
@@ -159,6 +90,9 @@
 
 #define XEN_CR4_PV32_BITS (X86_CR4_SMEP|X86_CR4_SMAP)
 
+/* Common SYSCALL parameters. */
+#define XEN_MSR_STAR (((uint64_t)FLAT_RING3_CS32 << 48) |   \
+                      ((uint64_t)__HYPERVISOR_CS << 32))
 #define XEN_SYSCALL_MASK (X86_EFLAGS_AC|X86_EFLAGS_VM|X86_EFLAGS_RF|    \
                           X86_EFLAGS_NT|X86_EFLAGS_DF|X86_EFLAGS_IF|    \
                           X86_EFLAGS_TF)
@@ -322,6 +256,22 @@ static always_inline unsigned int cpuid_edx(unsigned int op)
     return edx;
 }
 
+static always_inline unsigned int cpuid_count_ebx(
+    unsigned int leaf, unsigned int subleaf)
+{
+    unsigned int ebx, tmp;
+
+    cpuid_count(leaf, subleaf, &tmp, &ebx, &tmp, &tmp);
+
+    return ebx;
+}
+
+static always_inline void cpuid_count_leaf(uint32_t leaf, uint32_t subleaf,
+                                           struct cpuid_leaf *data)
+{
+    cpuid_count(leaf, subleaf, &data->a, &data->b, &data->c, &data->d);
+}
+
 static inline unsigned long read_cr0(void)
 {
     unsigned long cr0;
@@ -454,17 +404,6 @@ static inline bool_t read_pkru_wd(uint32_t pkru, unsigned int pkey)
     outb((data), 0x23); \
 } while (0)
 
-/* Stop speculative execution */
-static inline void sync_core(void)
-{
-    int tmp;
-    asm volatile (
-        "cpuid"
-        : "=a" (tmp)
-        : "0" (1)
-        : "ebx","ecx","edx","memory" );
-}
-
 static always_inline void __monitor(const void *eax, unsigned long ecx,
                                     unsigned long edx)
 {
@@ -486,19 +425,18 @@ static always_inline void __mwait(unsigned long eax, unsigned long ecx)
 #define IOBMP_INVALID_OFFSET    0x8000
 
 struct __packed __cacheline_aligned tss_struct {
-    unsigned short	back_link,__blh;
-    union { u64 rsp0, esp0; };
-    union { u64 rsp1, esp1; };
-    union { u64 rsp2, esp2; };
-    u64 reserved1;
-    u64 ist[7]; /* Interrupt Stack Table is 1-based so tss->ist[0]
-                 * corresponds to an IST value of 1 in an Interrupt
-                 * Descriptor */
-    u64 reserved2;
-    u16 reserved3;
-    u16 bitmap;
+    uint32_t :32;
+    uint64_t rsp0, rsp1, rsp2;
+    uint64_t :64;
+    /*
+     * Interrupt Stack Table is 1-based so tss->ist[0] corresponds to an IST
+     * value of 1 in an Interrupt Descriptor.
+     */
+    uint64_t ist[7];
+    uint64_t :64;
+    uint16_t :16, bitmap;
     /* Pads the TSS to be cacheline-aligned (total size is 0x80). */
-    u8 __cacheline_filler[24];
+    uint8_t __cacheline_filler[24];
 };
 
 #define IST_NONE 0UL
@@ -529,11 +467,6 @@ extern void init_int80_direct_trap(struct vcpu *v);
 
 extern void write_ptbase(struct vcpu *v);
 
-void destroy_gdt(struct vcpu *d);
-long set_gdt(struct vcpu *d, 
-             unsigned long *frames, 
-             unsigned int entries);
-
 /* REP NOP (PAUSE) is a good thing to insert into busy-wait loops. */
 static always_inline void rep_nop(void)
 {
@@ -549,9 +482,6 @@ void show_execution_state(const struct cpu_user_regs *regs);
 #define dump_execution_state() run_in_exception_handler(show_execution_state)
 void show_page_walk(unsigned long addr);
 void noreturn fatal_trap(const struct cpu_user_regs *regs, bool_t show_remote);
-
-void compat_show_guest_stack(struct vcpu *v,
-                             const struct cpu_user_regs *regs, int lines);
 
 extern void mtrr_ap_init(void);
 extern void mtrr_bp_init(void);
@@ -588,6 +518,8 @@ DECLARE_TRAP_HANDLER(simd_coprocessor_error);
 DECLARE_TRAP_HANDLER_CONST(machine_check);
 DECLARE_TRAP_HANDLER(alignment_check);
 
+DECLARE_TRAP_HANDLER(entry_int82);
+
 #undef DECLARE_TRAP_HANDLER_CONST
 #undef DECLARE_TRAP_HANDLER
 
@@ -597,7 +529,6 @@ void do_reserved_trap(struct cpu_user_regs *regs);
 
 void sysenter_entry(void);
 void sysenter_eflags_saved(void);
-void compat_hypercall(void);
 void int80_direct_trap(void);
 
 #define STUBS_PER_PAGE (PAGE_SIZE / STUB_BUF_SIZE)
@@ -613,22 +544,47 @@ struct stubs {
 DECLARE_PER_CPU(struct stubs, stubs);
 unsigned long alloc_stub_page(unsigned int cpu, unsigned long *mfn);
 
-int cpuid_hypervisor_leaves( uint32_t idx, uint32_t sub_idx,
-          uint32_t *eax, uint32_t *ebx, uint32_t *ecx, uint32_t *edx);
+void cpuid_hypervisor_leaves(const struct vcpu *v, uint32_t leaf,
+                             uint32_t subleaf, struct cpuid_leaf *res);
 int rdmsr_hypervisor_regs(uint32_t idx, uint64_t *val);
 int wrmsr_hypervisor_regs(uint32_t idx, uint64_t val);
 
 void microcode_set_module(unsigned int);
 int microcode_update(XEN_GUEST_HANDLE_PARAM(const_void), unsigned long len);
 int microcode_resume_cpu(unsigned int cpu);
+int early_microcode_update_cpu(bool start_update);
+int early_microcode_init(void);
+int microcode_init_intel(void);
+int microcode_init_amd(void);
 
 enum get_cpu_vendor {
     gcv_host,
     gcv_guest,
 };
 
-int get_cpu_vendor(const char vendor_id[], enum get_cpu_vendor);
-void pv_cpuid(struct cpu_user_regs *regs);
+int get_cpu_vendor(uint32_t b, uint32_t c, uint32_t d, enum get_cpu_vendor mode);
+
+static inline uint8_t get_cpu_family(uint32_t raw, uint8_t *model,
+                                     uint8_t *stepping)
+{
+    uint8_t fam = (raw >> 8) & 0xf;
+
+    if ( fam == 0xf )
+        fam += (raw >> 20) & 0xff;
+
+    if ( model )
+    {
+        uint8_t mod = (raw >> 4) & 0xf;
+
+        if ( fam >= 0x6 )
+            mod |= (raw >> 12) & 0xf0;
+
+        *model = mod;
+    }
+    if ( stepping )
+        *stepping = raw & 0xf;
+    return fam;
+}
 
 #endif /* !__ASSEMBLY__ */
 

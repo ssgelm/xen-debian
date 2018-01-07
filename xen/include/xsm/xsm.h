@@ -109,13 +109,11 @@ struct xsm_operations {
 
 #if defined(CONFIG_HAS_PASSTHROUGH) && defined(CONFIG_HAS_PCI)
     int (*get_device_group) (uint32_t machine_bdf);
-    int (*test_assign_device) (uint32_t machine_bdf);
     int (*assign_device) (struct domain *d, uint32_t machine_bdf);
     int (*deassign_device) (struct domain *d, uint32_t machine_bdf);
 #endif
 
 #if defined(CONFIG_HAS_PASSTHROUGH) && defined(CONFIG_HAS_DEVICE_TREE)
-    int (*test_assign_dtdevice) (const char *dtpath);
     int (*assign_dtdevice) (struct domain *d, const char *dtpath);
     int (*deassign_dtdevice) (struct domain *d, const char *dtpath);
 #endif
@@ -140,7 +138,7 @@ struct xsm_operations {
     int (*hvm_control) (struct domain *d, unsigned long op);
     int (*hvm_param_nested) (struct domain *d);
     int (*hvm_param_altp2mhvm) (struct domain *d);
-    int (*hvm_altp2mhvm_op) (struct domain *d);
+    int (*hvm_altp2mhvm_op) (struct domain *d, uint64_t mode, uint32_t op);
     int (*get_vnumainfo) (struct domain *d);
 
     int (*vm_event_control) (struct domain *d, int mode, int op);
@@ -162,11 +160,6 @@ struct xsm_operations {
 #ifdef CONFIG_X86
     int (*do_mca) (void);
     int (*shadow_control) (struct domain *d, uint32_t op);
-    int (*hvm_set_pci_intx_level) (struct domain *d);
-    int (*hvm_set_isa_irq_level) (struct domain *d);
-    int (*hvm_set_pci_link_route) (struct domain *d);
-    int (*hvm_inject_msi) (struct domain *d);
-    int (*hvm_ioreq_server) (struct domain *d, int op);
     int (*mem_sharing_op) (struct domain *d, struct domain *cd, int op);
     int (*apic) (struct domain *d, int cmd);
     int (*memtype) (uint32_t access);
@@ -184,6 +177,7 @@ struct xsm_operations {
     int (*ioport_permission) (struct domain *d, uint32_t s, uint32_t e, uint8_t allow);
     int (*ioport_mapping) (struct domain *d, uint32_t s, uint32_t e, uint8_t allow);
     int (*pmu_op) (struct domain *d, unsigned int op);
+    int (*dm_op) (struct domain *d);
 #endif
     int (*xen_version) (uint32_t cmd);
 };
@@ -469,11 +463,6 @@ static inline int xsm_get_device_group(xsm_default_t def, uint32_t machine_bdf)
     return xsm_ops->get_device_group(machine_bdf);
 }
 
-static inline int xsm_test_assign_device(xsm_default_t def, uint32_t machine_bdf)
-{
-    return xsm_ops->test_assign_device(machine_bdf);
-}
-
 static inline int xsm_assign_device(xsm_default_t def, struct domain *d, uint32_t machine_bdf)
 {
     return xsm_ops->assign_device(d, machine_bdf);
@@ -490,12 +479,6 @@ static inline int xsm_assign_dtdevice(xsm_default_t def, struct domain *d,
                                       const char *dtpath)
 {
     return xsm_ops->assign_dtdevice(d, dtpath);
-}
-
-static inline int xsm_test_assign_dtdevice(xsm_default_t def,
-                                           const char *dtpath)
-{
-    return xsm_ops->test_assign_dtdevice(dtpath);
 }
 
 static inline int xsm_deassign_dtdevice(xsm_default_t def, struct domain *d,
@@ -583,9 +566,9 @@ static inline int xsm_hvm_param_altp2mhvm (xsm_default_t def, struct domain *d)
     return xsm_ops->hvm_param_altp2mhvm(d);
 }
 
-static inline int xsm_hvm_altp2mhvm_op (xsm_default_t def, struct domain *d)
+static inline int xsm_hvm_altp2mhvm_op (xsm_default_t def, struct domain *d, uint64_t mode, uint32_t op)
 {
-    return xsm_ops->hvm_altp2mhvm_op(d);
+    return xsm_ops->hvm_altp2mhvm_op(d, mode, op);
 }
 
 static inline int xsm_get_vnumainfo (xsm_default_t def, struct domain *d)
@@ -633,31 +616,6 @@ static inline int xsm_do_mca(xsm_default_t def)
 static inline int xsm_shadow_control (xsm_default_t def, struct domain *d, uint32_t op)
 {
     return xsm_ops->shadow_control(d, op);
-}
-
-static inline int xsm_hvm_set_pci_intx_level (xsm_default_t def, struct domain *d)
-{
-    return xsm_ops->hvm_set_pci_intx_level(d);
-}
-
-static inline int xsm_hvm_set_isa_irq_level (xsm_default_t def, struct domain *d)
-{
-    return xsm_ops->hvm_set_isa_irq_level(d);
-}
-
-static inline int xsm_hvm_set_pci_link_route (xsm_default_t def, struct domain *d)
-{
-    return xsm_ops->hvm_set_pci_link_route(d);
-}
-
-static inline int xsm_hvm_inject_msi (xsm_default_t def, struct domain *d)
-{
-    return xsm_ops->hvm_inject_msi(d);
-}
-
-static inline int xsm_hvm_ioreq_server (xsm_default_t def, struct domain *d, int op)
-{
-    return xsm_ops->hvm_ioreq_server(d, op);
 }
 
 static inline int xsm_mem_sharing_op (xsm_default_t def, struct domain *d, struct domain *cd, int op)
@@ -720,6 +678,11 @@ static inline int xsm_ioport_mapping (xsm_default_t def, struct domain *d, uint3
 static inline int xsm_pmu_op (xsm_default_t def, struct domain *d, unsigned int op)
 {
     return xsm_ops->pmu_op(d, op);
+}
+
+static inline int xsm_dm_op(xsm_default_t def, struct domain *d)
+{
+    return xsm_ops->dm_op(d);
 }
 
 #endif /* CONFIG_X86 */

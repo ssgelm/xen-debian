@@ -5,7 +5,6 @@
  * We need the APIC definitions automatically as part of 'smp.h'
  */
 #ifndef __ASSEMBLY__
-#include <xen/config.h>
 #include <xen/kernel.h>
 #include <xen/cpumask.h>
 #include <asm/current.h>
@@ -25,6 +24,7 @@
  */
 DECLARE_PER_CPU(cpumask_var_t, cpu_sibling_mask);
 DECLARE_PER_CPU(cpumask_var_t, cpu_core_mask);
+DECLARE_PER_CPU(cpumask_var_t, scratch_cpumask);
 
 void smp_send_nmi_allbutself(void);
 

@@ -161,15 +161,13 @@ struct xc_dom_image {
     unsigned long flags;
     unsigned int console_evtchn;
     unsigned int xenstore_evtchn;
-    domid_t console_domid;
-    domid_t xenstore_domid;
+    uint32_t console_domid;
+    uint32_t xenstore_domid;
     xen_pfn_t shared_info_mfn;
-    int pvh_enabled;
 
     xc_interface *xch;
-    domid_t guest_domid;
+    uint32_t guest_domid;
     int claim_enabled; /* 0 by default, 1 enables it */
-    int shadow_enabled;
 
     int xen_version;
     xen_capabilities_info_t xen_caps;
@@ -218,6 +216,8 @@ struct xc_dom_image {
 
     /* Extra SMBIOS structures passed to HVMLOADER */
     struct xc_hvm_firmware_module smbios_module;
+
+    xen_pfn_t vuart_gfn;
 };
 
 /* --- pluggable kernel loader ------------------------------------- */
@@ -318,24 +318,24 @@ int xc_dom_build_image(struct xc_dom_image *dom);
 int xc_dom_update_guest_p2m(struct xc_dom_image *dom);
 
 int xc_dom_boot_xen_init(struct xc_dom_image *dom, xc_interface *xch,
-                     domid_t domid);
+                         uint32_t domid);
 int xc_dom_boot_mem_init(struct xc_dom_image *dom);
 void *xc_dom_boot_domU_map(struct xc_dom_image *dom, xen_pfn_t pfn,
                            xen_pfn_t count);
 int xc_dom_boot_image(struct xc_dom_image *dom);
 int xc_dom_compat_check(struct xc_dom_image *dom);
 int xc_dom_gnttab_init(struct xc_dom_image *dom);
-int xc_dom_gnttab_hvm_seed(xc_interface *xch, domid_t domid,
+int xc_dom_gnttab_hvm_seed(xc_interface *xch, uint32_t domid,
                            xen_pfn_t console_gmfn,
                            xen_pfn_t xenstore_gmfn,
-                           domid_t console_domid,
-                           domid_t xenstore_domid);
-int xc_dom_gnttab_seed(xc_interface *xch, domid_t domid,
+                           uint32_t console_domid,
+                           uint32_t xenstore_domid);
+int xc_dom_gnttab_seed(xc_interface *xch, uint32_t domid,
                        xen_pfn_t console_gmfn,
                        xen_pfn_t xenstore_gmfn,
-                       domid_t console_domid,
-                       domid_t xenstore_domid);
-int xc_dom_feature_translated(struct xc_dom_image *dom);
+                       uint32_t console_domid,
+                       uint32_t xenstore_domid);
+bool xc_dom_translated(const struct xc_dom_image *dom);
 
 /* --- debugging bits ---------------------------------------------- */
 
@@ -421,7 +421,7 @@ static inline void *xc_dom_vaddr_to_ptr(struct xc_dom_image *dom,
 
 static inline xen_pfn_t xc_dom_p2m(struct xc_dom_image *dom, xen_pfn_t pfn)
 {
-    if ( dom->shadow_enabled || xc_dom_feature_translated(dom) )
+    if ( xc_dom_translated(dom) )
         return pfn;
     if (pfn < dom->rambase_pfn || pfn >= dom->rambase_pfn + dom->total_pages)
         return INVALID_MFN;

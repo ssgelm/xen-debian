@@ -225,10 +225,6 @@ XEN_BUILD_TIME=hh:mm:ss
 SMBIOS_REL_DATE=mm/dd/yyyy
 VGABIOS_REL_DATE="dd Mon yyyy"
 
-The following variables can be used to tweak some aspects of the
-hypervisor build.
-lto=y
-
 During tools build external repos will be cloned into the source tree.
 This variable can be used to point to a different git binary to be used.
 GIT=
@@ -279,9 +275,6 @@ This option is enabled by default if XSM is enabled and the compiler
 (checkpolicy) is found.  The location of this executable can be set
 using the environment variable.
 CHECKPOLICY=
-
-Do a build for coverage.
-coverage=y
 
 Use clang instead of GCC.
 clang=y

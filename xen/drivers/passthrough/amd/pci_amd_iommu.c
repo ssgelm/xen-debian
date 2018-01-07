@@ -168,33 +168,6 @@ static void amd_iommu_setup_domain_device(
     }
 }
 
-static int __hwdom_init amd_iommu_setup_hwdom_device(
-    u8 devfn, struct pci_dev *pdev)
-{
-    int bdf = PCI_BDF2(pdev->bus, pdev->devfn);
-    struct amd_iommu *iommu = find_iommu_for_device(pdev->seg, bdf);
-
-    if ( unlikely(!iommu) )
-    {
-        /* Filter the bridge devices */
-        if ( pdev->type == DEV_TYPE_PCI_HOST_BRIDGE )
-        {
-            AMD_IOMMU_DEBUG("Skipping host bridge %04x:%02x:%02x.%u\n",
-                            pdev->seg, PCI_BUS(bdf), PCI_SLOT(bdf),
-                            PCI_FUNC(bdf));
-            return 0;
-        }
-
-        AMD_IOMMU_DEBUG("No iommu for device %04x:%02x:%02x.%u\n",
-                        pdev->seg, pdev->bus,
-                        PCI_SLOT(devfn), PCI_FUNC(devfn));
-        return -ENODEV;
-    }
-
-    amd_iommu_setup_domain_device(pdev->domain, iommu, devfn, pdev);
-    return 0;
-}
-
 int __init amd_iov_detect(void)
 {
     INIT_LIST_HEAD(&amd_iommu_head);
@@ -222,21 +195,27 @@ int __init amd_iov_detect(void)
     return scan_pci_devices();
 }
 
-static int allocate_domain_resources(struct domain_iommu *hd)
+int amd_iommu_alloc_root(struct domain_iommu *hd)
 {
-    /* allocate root table */
-    spin_lock(&hd->arch.mapping_lock);
-    if ( !hd->arch.root_table )
+    if ( unlikely(!hd->arch.root_table) )
     {
         hd->arch.root_table = alloc_amd_iommu_pgtable();
         if ( !hd->arch.root_table )
-        {
-            spin_unlock(&hd->arch.mapping_lock);
             return -ENOMEM;
-        }
     }
-    spin_unlock(&hd->arch.mapping_lock);
+
     return 0;
+}
+
+static int __must_check allocate_domain_resources(struct domain_iommu *hd)
+{
+    int rc;
+
+    spin_lock(&hd->arch.mapping_lock);
+    rc = amd_iommu_alloc_root(hd);
+    spin_unlock(&hd->arch.mapping_lock);
+
+    return rc;
 }
 
 static int get_paging_mode(unsigned long entries)
@@ -259,14 +238,6 @@ static int amd_iommu_domain_init(struct domain *d)
 {
     struct domain_iommu *hd = dom_iommu(d);
 
-    /* allocate page directroy */
-    if ( allocate_domain_resources(hd) != 0 )
-    {
-        if ( hd->arch.root_table )
-            free_domheap_page(hd->arch.root_table);
-        return -ENOMEM;
-    }
-
     /* For pv and dom0, stick with get_paging_mode(max_page)
      * For HVM dom0, use 2 level page table at first */
     hd->arch.paging_mode = is_hvm_domain(d) ?
@@ -275,10 +246,15 @@ static int amd_iommu_domain_init(struct domain *d)
     return 0;
 }
 
+static int amd_iommu_add_device(u8 devfn, struct pci_dev *pdev);
+
 static void __hwdom_init amd_iommu_hwdom_init(struct domain *d)
 {
     unsigned long i; 
     const struct amd_iommu *iommu;
+
+    if ( allocate_domain_resources(dom_iommu(d)) )
+        BUG();
 
     if ( !iommu_passthrough && !need_iommu(d) )
     {
@@ -293,7 +269,7 @@ static void __hwdom_init amd_iommu_hwdom_init(struct domain *d)
              * XXX Should we really map all non-RAM (above 4G)? Minimally
              * a pfn_valid() check would seem desirable here.
              */
-            if ( mfn_valid(pfn) )
+            if ( mfn_valid(_mfn(pfn)) )
             {
                 int ret = amd_iommu_map_page(d, pfn, pfn,
                                              IOMMUF_readable|IOMMUF_writable);
@@ -317,7 +293,7 @@ static void __hwdom_init amd_iommu_hwdom_init(struct domain *d)
                                         IOMMU_MMIO_REGION_LENGTH - 1)) )
             BUG();
 
-    setup_hwdom_pci_devices(d, amd_iommu_setup_hwdom_device);
+    setup_hwdom_pci_devices(d, amd_iommu_add_device);
 }
 
 void amd_iommu_disable_domain_device(struct domain *domain,
@@ -363,7 +339,7 @@ static int reassign_device(struct domain *source, struct domain *target,
                            u8 devfn, struct pci_dev *pdev)
 {
     struct amd_iommu *iommu;
-    int bdf;
+    int bdf, rc;
     struct domain_iommu *t = dom_iommu(target);
 
     bdf = PCI_BDF2(pdev->bus, pdev->devfn);
@@ -385,10 +361,9 @@ static int reassign_device(struct domain *source, struct domain *target,
         pdev->domain = target;
     }
 
-    /* IO page tables might be destroyed after pci-detach the last device
-     * In this case, we have to re-allocate root table for next pci-attach.*/
-    if ( t->arch.root_table == NULL )
-        allocate_domain_resources(t);
+    rc = allocate_domain_resources(t);
+    if ( rc )
+        return rc;
 
     amd_iommu_setup_domain_device(target, iommu, devfn, pdev);
     AMD_IOMMU_DEBUG("Re-assign %04x:%02x:%02x.%u from dom%d to dom%d\n",
@@ -490,15 +465,25 @@ static int amd_iommu_add_device(u8 devfn, struct pci_dev *pdev)
 {
     struct amd_iommu *iommu;
     u16 bdf;
+
     if ( !pdev->domain )
         return -EINVAL;
 
     bdf = PCI_BDF2(pdev->bus, pdev->devfn);
     iommu = find_iommu_for_device(pdev->seg, bdf);
-    if ( !iommu )
+    if ( unlikely(!iommu) )
     {
-        AMD_IOMMU_DEBUG("Fail to find iommu."
-                        " %04x:%02x:%02x.%u cannot be assigned to dom%d\n",
+        /* Filter bridge devices. */
+        if ( pdev->type == DEV_TYPE_PCI_HOST_BRIDGE &&
+             is_hardware_domain(pdev->domain) )
+        {
+            AMD_IOMMU_DEBUG("Skipping host bridge %04x:%02x:%02x.%u\n",
+                            pdev->seg, pdev->bus, PCI_SLOT(devfn),
+                            PCI_FUNC(devfn));
+            return 0;
+        }
+
+        AMD_IOMMU_DEBUG("No iommu for %04x:%02x:%02x.%u; cannot be handed to d%d\n",
                         pdev->seg, pdev->bus, PCI_SLOT(devfn), PCI_FUNC(devfn),
                         pdev->domain->domain_id);
         return -ENODEV;

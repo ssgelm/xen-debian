@@ -48,7 +48,7 @@ struct mapped_rmrr {
 };
 
 /* Possible unfiltered LAPIC/MSI messages from untrusted sources? */
-bool_t __read_mostly untrusted_msi;
+bool __read_mostly untrusted_msi;
 
 int nr_iommus;
 
@@ -2309,7 +2309,9 @@ int __init intel_vtd_setup(void)
     P(iommu_hap_pt_share, "Shared EPT tables");
 #undef P
 
-    scan_pci_devices();
+    ret = scan_pci_devices();
+    if ( ret )
+        goto error;
 
     ret = init_vtd_hw();
     if ( ret )
@@ -2342,7 +2344,7 @@ static int reassign_device_ownership(
      * by the root complex unless interrupt remapping is enabled.
      */
     if ( (target != hardware_domain) && !iommu_intremap )
-        untrusted_msi = 1;
+        untrusted_msi = true;
 
     /*
      * If the device belongs to the hardware domain, and it has RMRR, don't

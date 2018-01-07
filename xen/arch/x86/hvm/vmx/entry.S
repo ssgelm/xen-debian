@@ -16,7 +16,8 @@
  * this program; If not, see <http://www.gnu.org/licenses/>.
  */
 
-#include <xen/config.h>
+        .file "vmx/entry.S"
+
 #include <xen/errno.h>
 #include <xen/softirq.h>
 #include <asm/types.h>
@@ -78,6 +79,8 @@ UNLIKELY_END(realmode)
 
         mov  %rsp,%rdi
         call vmx_vmenter_helper
+        test %al, %al
+        jz .Lvmx_vmentry_restart
         mov  VCPU_hvm_guest_cr2(%rbx),%rax
 
         pop  %r15
@@ -114,6 +117,10 @@ UNLIKELY_END(realmode)
 
 ENTRY(vmx_asm_do_vmentry)
         GET_CURRENT(bx)
+        jmp  .Lvmx_do_vmentry
+
+.Lvmx_vmentry_restart:
+        sti
         jmp  .Lvmx_do_vmentry
 
 .Lvmx_goto_emulator:

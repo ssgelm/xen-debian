@@ -181,7 +181,6 @@ static void setup_emulator_write(libxl__egc *egc,
                                  sws_record_done_cb cb)
 {
     assert(stream->emu_sub_hdr.id != EMULATOR_UNKNOWN);
-    assert(stream->device_model_version != LIBXL_DEVICE_MODEL_VERSION_NONE);
     setup_generic_write(egc, stream, what, hdr, emu_hdr, body, cb);
 }
 
@@ -261,13 +260,9 @@ void libxl__stream_write_start(libxl__egc *egc,
             stream->emu_sub_hdr.id = EMULATOR_QEMU_UPSTREAM;
             break;
 
-        case LIBXL_DEVICE_MODEL_VERSION_NONE:
-            stream->emu_sub_hdr.id = EMULATOR_UNKNOWN;
-            break;
-
         default:
             rc = ERROR_FAIL;
-            LOG(ERROR, "Unknown emulator for HVM domain");
+            LOGD(ERROR, dss->domid, "Unknown emulator for HVM domain");
             goto err;
         }
         stream->emu_sub_hdr.index = 0;
@@ -349,7 +344,7 @@ void libxl__xc_domain_save_done(libxl__egc *egc, void *dss_void,
         goto err;
 
     if (retval) {
-        LOGEV(ERROR, errnoval, "saving domain: %s",
+        LOGEVD(ERROR, errnoval, dss->domid, "saving domain: %s",
               dss->dsps.guest_responded ?
               "domain responded to suspend request" :
               "domain did not respond to suspend request");
@@ -395,7 +390,7 @@ static void write_emulator_xenstore_record(libxl__egc *egc,
     char *buf = NULL;
     uint32_t len = 0;
 
-    if (stream->device_model_version == LIBXL_DEVICE_MODEL_VERSION_NONE) {
+    if (dss->type != LIBXL_DOMAIN_TYPE_HVM) {
         emulator_xenstore_record_done(egc, stream);
         return;
     }
@@ -449,9 +444,7 @@ static void write_emulator_context_record(libxl__egc *egc,
     struct stat st;
     int rc;
 
-    assert(dss->type == LIBXL_DOMAIN_TYPE_HVM);
-
-    if (stream->device_model_version == LIBXL_DEVICE_MODEL_VERSION_NONE) {
+    if (dss->type != LIBXL_DOMAIN_TYPE_HVM) {
         emulator_context_record_done(egc, stream);
         return;
     }
@@ -464,19 +457,19 @@ static void write_emulator_context_record(libxl__egc *egc,
     stream->emu_carefd = libxl__carefd_opened(CTX, readfd);
     if (readfd == -1) {
         rc = ERROR_FAIL;
-        LOGE(ERROR, "unable to open %s", filename);
+        LOGED(ERROR, dss->domid, "unable to open %s", filename);
         goto err;
     }
 
     if (fstat(readfd, &st)) {
         rc = ERROR_FAIL;
-        LOGE(ERROR, "unable to fstat %s", filename);
+        LOGED(ERROR, dss->domid, "unable to fstat %s", filename);
         goto err;
     }
 
     if (!S_ISREG(st.st_mode)) {
         rc = ERROR_FAIL;
-        LOG(ERROR, "%s is not a plain file!", filename);
+        LOGD(ERROR, dss->domid, "%s is not a plain file!", filename);
         goto err;
     }
 

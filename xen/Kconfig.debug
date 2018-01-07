@@ -30,14 +30,58 @@ config FRAME_POINTER
 
 config GCOV
 	bool "Gcov Support"
+	depends on !LIVEPATCH
+	select SUPPRESS_DUPLICATE_SYMBOL_WARNINGS
 	---help---
 	  Enable gcov (a test coverage program in GCC) support.
 
-	  Currently the data structure and hypercall interface are tied
-	  to GCC 3.4 gcov format. You need to have a version of GCC
-	  that is compatible with that format to make gcov work.
-
 	  If unsure, say N here.
+
+choice
+	prompt "Specify Gcov format"
+	depends on GCOV
+	default GCOV_FORMAT_AUTODETECT
+	---help---
+	  The gcov format is determined by gcc version.
+
+	  If unsure, choose "Autodetect".
+
+config GCOV_FORMAT_AUTODETECT
+	bool "Autodetect"
+	---help---
+	  Automatically select gcov format based on gcc version.
+
+config GCOV_FORMAT_7
+	bool "GCC 7 format"
+	---help---
+	  Select this option to use the format specified in GCC 7.
+	  Works in gcc version range [7, ...).
+
+config GCOV_FORMAT_5
+	bool "GCC 5 format"
+	---help---
+	  Select this option to use the format specified in GCC 5.
+	  Works in gcc version range [5, 7).
+
+config GCOV_FORMAT_4_9
+	bool "GCC 4.9 format"
+	---help---
+	  Select this option to use the format specified in GCC 4.9.
+	  Works in gcc version range [4.9, 5).
+
+config GCOV_FORMAT_4_7
+	bool "GCC 4.7 format"
+	---help---
+	  Select this option to use the format specified in GCC 4.7.
+	  Works in gcc version range [4.7, 4.9).
+
+config GCOV_FORMAT_3_4
+	bool "GCC 3.4 format"
+	---help---
+	  Select this option to use the format specified in GCC 3.4.
+	  Works in gcc version range [3.4, 4.7).
+
+endchoice
 
 config LOCK_PROFILE
 	bool "Lock Profiling"
@@ -74,6 +118,23 @@ config DEVICE_TREE_DEBUG
 	---help---
 	  Device tree parsing and DOM0 device tree building messages are
 	  logged in the Xen ring buffer.
+	  If unsure, say N here.
+
+config SCRUB_DEBUG
+	bool "Page scrubbing test"
+	default DEBUG
+	---help---
+	  Verify that pages that need to be scrubbed before being allocated to
+	  a guest are indeed scrubbed.
+
+config UBSAN
+	bool "Undefined behaviour sanitizer"
+	depends on HAS_UBSAN
+	---help---
+	  Enable undefined behaviour sanitizer. It uses compiler to insert code
+	  snippets so that undefined behaviours in C are detected during runtime.
+	  This requires a UBSAN capable compiler and it is a debug only feature.
+
 	  If unsure, say N here.
 
 endif # DEBUG || EXPERT

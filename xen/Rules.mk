@@ -1,10 +1,4 @@
 
-#
-# If you change any of these configuration options then you must
-# 'make clean' before rebuilding.
-#
-lto           ?= n
-
 -include $(BASEDIR)/include/config/auto.conf
 
 include $(XEN_ROOT)/Config.mk
@@ -125,7 +119,13 @@ ifeq ($(CONFIG_GCOV),y)
 $(filter-out %.init.o $(nogcov-y),$(obj-y) $(obj-bin-y) $(extra-y)): CFLAGS += -fprofile-arcs -ftest-coverage
 endif
 
-ifeq ($(lto),y)
+ifeq ($(CONFIG_UBSAN),y)
+$(filter-out %.init.o $(noubsan-y),$(obj-y) $(obj-bin-y) $(extra-y)): CFLAGS += -fsanitize=undefined
+endif
+
+ifeq ($(CONFIG_LTO),y)
+CFLAGS += -flto
+LDFLAGS-$(clang) += -plugin LLVMgold.so
 # Would like to handle all object files as bitcode, but objects made from
 # pure asm are in a different format and have to be collected separately.
 # Mirror the directory tree, collecting them as built_in_bin.o.
@@ -144,7 +144,7 @@ built_in.o: $(obj-y)
 ifeq ($(obj-y),)
 	$(CC) $(CFLAGS) -c -x c /dev/null -o $@
 else
-ifeq ($(lto),y)
+ifeq ($(CONFIG_LTO),y)
 	$(LD_LTO) -r -o $@ $^
 else
 	$(LD) $(LDFLAGS) -r -o $@ $^
@@ -170,7 +170,7 @@ FORCE:
 
 .PHONY: clean
 clean:: $(addprefix _clean_, $(subdir-all))
-	rm -f *.o *~ core $(DEPS)
+	rm -f *.o *~ core $(DEPS_RM)
 _clean_%/: FORCE
 	$(MAKE) -f $(BASEDIR)/Rules.mk -C $* clean
 
@@ -208,4 +208,4 @@ $(filter %.init.o,$(obj-y) $(obj-bin-y) $(extra-y)): %.init.o: %.o Makefile
 %.s: %.S Makefile
 	$(CPP) $(AFLAGS) $< -o $@
 
--include $(DEPS)
+-include $(DEPS_INCLUDE)

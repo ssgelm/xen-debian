@@ -12,7 +12,6 @@
 #ifndef _ASM_FIXMAP_H
 #define _ASM_FIXMAP_H
 
-#include <xen/config.h>
 #include <asm/page.h>
 
 #define FIXADDR_TOP (VMAP_VIRT_END - PAGE_SIZE)
@@ -73,7 +72,7 @@ extern void __set_fixmap(
     __set_fixmap(idx, (phys)>>PAGE_SHIFT, PAGE_HYPERVISOR)
 
 #define set_fixmap_nocache(idx, phys) \
-    __set_fixmap(idx, (phys)>>PAGE_SHIFT, PAGE_HYPERVISOR_NOCACHE)
+    __set_fixmap(idx, (phys)>>PAGE_SHIFT, PAGE_HYPERVISOR_UCMINUS)
 
 #define clear_fixmap(idx) __set_fixmap(idx, 0, 0)
 

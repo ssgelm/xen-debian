@@ -754,7 +754,8 @@ struct xc_dom_image *xc_dom_allocate(xc_interface *xch,
     struct xc_dom_image *dom;
 
     xc_dom_printf(xch, "%s: cmdline=\"%s\", features=\"%s\"",
-                  __FUNCTION__, cmdline, features);
+                  __FUNCTION__, cmdline ? cmdline : "",
+                  features ? features : "");
     dom = malloc(sizeof(*dom));
     if ( !dom )
         goto err;
@@ -894,15 +895,6 @@ int xc_dom_parse_image(struct xc_dom_image *dom)
         xc_dom_panic(dom->xch, XC_INTERNAL_ERROR,
                      "%s: guest_type not set", __FUNCTION__);
         goto err;
-    }
-
-    if ( dom->pvh_enabled )
-    {
-        const char *pvh_features = "writable_descriptor_tables|"
-                                   "auto_translated_physmap|"
-                                   "supervisor_mode_kernel|"
-                                   "hvm_callback_vector";
-        elf_xen_parse_features(pvh_features, dom->f_requested, NULL);
     }
 
     /* check features */
